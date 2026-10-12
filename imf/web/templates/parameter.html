@@ -1,0 +1,124 @@
+{% extends "base.html" %}
+{% block title %}{{ p.name }}{% endblock %}
+{% block content %}
+{% set lv = p.state.level if p.state else 0 %}{% set lim = p.current_limit %}
+<div class="toolbar" style="justify-content:space-between">
+  <h1 style="margin:0">{{ p.name }} <span class="st {{ LEVEL_CLASS[lv] }}">{{ LEVEL_CLASS[lv] }}</span></h1>
+  <form onsubmit="location.href='/parameters/'+this.c.value;return false" style="margin:0">
+    <select name="c" onchange="this.form.onsubmit()">
+      {% for o in others %}<option value="{{ o.code }}" {{ 'selected' if o.code == p.code }}>{{ o.group }} · {{ o.name }}</option>{% endfor %}
+    </select>
+  </form>
+</div>
+
+<div class="grid g-side">
+  <div class="panel">
+    <div class="toolbar">
+      <div class="seg" id="ranges">
+        {% for r in ['1d', '7d', '30d', '90d', 'all'] %}<button data-r="{{ r }}" class="{{ 'on' if r == '30d' }}">{{ r }}</button>{% endfor %}
+      </div>
+      <label class="live"><input type="checkbox" id="auto" checked> live update</label>
+      <a class="btn secondary small" href="/explorer?codes={{ p.code }}">compare…</a>
+      {% if user.is_expert %}<a class="btn secondary small" id="csv" href="/api/parameters/{{ p.code }}/csv?range=30d">CSV export</a>{% endif %}
+      <span class="sub">Shaded areas: event periods · dashed: warning · solid: alarm limits{% if user.is_expert %} · click a point to annotate / open its product{% endif %}</span>
+    </div>
+    <div id="chart" class="chart" style="height:460px"></div>
+    <div id="clicked" class="sub"></div>
+  </div>
+
+  <div class="grid" style="align-content:start">
+    <div class="panel">
+      <h2>Definition</h2>
+      <dl class="kv">
+        <dt>Code</dt><dd class="mono">{{ p.code }}</dd>
+        <dt>Group</dt><dd>{{ p.group }}</dd>
+        <dt>Unit</dt><dd>{{ p.unit }}</dd>
+        <dt>Description</dt><dd>{{ p.description }}</dd>
+        {% if user.is_expert %}<dt>Algorithm</dt><dd class="mono">{{ p.algorithm }}</dd><dt>Visibility</dt><dd>{{ p.visibility }}</dd>{% endif %}
+        <dt>Samples</dt><dd>{{ stats[0] }}</dd>
+        <dt>Min / mean / max</dt><dd>{{ stats[1]|num }} / {{ stats[3]|num }} / {{ stats[2]|num }}</dd>
+        <dt>Latest</dt><dd>{{ p.state.last_value|num if p.state else '–' }} at {{ p.state.last_time|fmt if p.state else '–' }}</dd>
+      </dl>
+    </div>
+
+    <div class="panel">
+      <h2>Limits {% if lim %}<span class="sub">since {{ lim.valid_from|fmt }} by {{ lim.changed_by }}</span>{% endif %}</h2>
+      {% if user.is_admin %}
+      <form method="post" action="/admin/limits/{{ p.code }}">
+        <input type="hidden" name="next" value="/parameters/{{ p.code }}">
+        <table>
+          <tr><th></th><th>low</th><th>high</th></tr>
+          <tr><td>Warning</td><td><input class="small" name="warn_lo" value="{{ lim.warn_lo if lim and lim.warn_lo is not none }}"></td><td><input class="small" name="warn_hi" value="{{ lim.warn_hi if lim and lim.warn_hi is not none }}"></td></tr>
+          <tr><td>Alarm</td><td><input class="small" name="alarm_lo" value="{{ lim.alarm_lo if lim and lim.alarm_lo is not none }}"></td><td><input class="small" name="alarm_hi" value="{{ lim.alarm_hi if lim and lim.alarm_hi is not none }}"></td></tr>
+          <tr><td>Persistence</td><td colspan="2"><input class="small" type="number" min="1" name="persistence" value="{{ lim.persistence if lim else 1 }}"> consecutive samples</td></tr>
+        </table>
+        <p><input type="text" name="comment" placeholder="reason for change (audited)" style="width:100%"></p>
+        <button class="btn small">Save new limit version</button>
+      </form>
+      {% elif lim %}
+      <dl class="kv">
+        <dt>Warning</dt><dd>{{ lim.warn_lo|num if lim.warn_lo is not none else '–' }} … {{ lim.warn_hi|num if lim.warn_hi is not none else '–' }}</dd>
+        <dt>Alarm</dt><dd>{{ lim.alarm_lo|num if lim.alarm_lo is not none else '–' }} … {{ lim.alarm_hi|num if lim.alarm_hi is not none else '–' }}</dd>
+        <dt>Persistence</dt><dd>{{ lim.persistence }} sample(s)</dd>
+      </dl>
+      {% else %}<p class="muted">No limits defined.</p>{% endif %}
+      {% if user.is_expert and p.limits|length > 1 %}
+      <details style="margin-top:8px"><summary>Limit history ({{ p.limits|length }} versions)</summary>
+        <table>{% for l in p.limits %}<tr><td>{{ l.valid_from|fmt }}</td><td>{{ l.changed_by }}</td>
+          <td class="mono">W[{{ l.warn_lo }}, {{ l.warn_hi }}] A[{{ l.alarm_lo }}, {{ l.alarm_hi }}] P{{ l.persistence }}</td><td>{{ l.comment }}</td></tr>{% endfor %}</table>
+      </details>{% endif %}
+    </div>
+
+    {% if user.is_expert %}
+    <div class="panel">
+      <h2>Annotate</h2>
+      <form method="post" action="/parameters/{{ p.code }}/annotations">
+        <p><input type="text" id="ann-time" name="time" placeholder="YYYY-MM-DDTHH:MM (click on plot)" required style="width:100%"></p>
+        <p><textarea name="text" rows="2" placeholder="e.g. decontamination performed" required style="width:100%"></textarea></p>
+        <button class="btn small">Add annotation</button>
+      </form>
+    </div>
+    <div class="panel">
+      <h2>Recent events <a class="sub" href="/events?parameter={{ p.code }}&status=">all →</a></h2>
+      <table>
+        {% for e in events %}
+        <tr><td><span class="st {{ e.severity }}">{{ e.severity }}</span></td><td>{{ e.time|fmt }}</td>
+            <td class="n">{{ e.value|num }}</td><td><span class="st {{ e.status }}">{{ e.status }}</span></td></tr>
+        {% else %}<tr><td class="muted">No events.</td></tr>{% endfor %}
+      </table>
+    </div>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+window.IMF_CUSTOM_WATCH = true;
+const CODE = {{ p.code|tojson }}, EXPERT = {{ 'true' if user.is_expert else 'false' }};
+let range = "30d", lastData = null;
+const chart = document.getElementById("chart");
+async function load() {
+  lastData = await IMF.json(`/api/series?codes=${CODE}&range=${range}`);
+  if (lastData) IMF.plot(chart, lastData);
+  const csv = document.getElementById("csv"); if (csv) csv.href = `/api/parameters/${CODE}/csv?range=${range}`;
+  if (EXPERT && !chart._clickBound) {
+    chart._clickBound = true;
+    chart.on("plotly_click", ev => {
+      const pt = ev.points[0]; if (!pt) return;
+      document.getElementById("ann-time").value = String(pt.x).slice(0, 16).replace(" ", "T");
+      const s = lastData.series[CODE], i = pt.customdata;
+      const prod = s.product ? s.product[i] : null;
+      document.getElementById("clicked").innerHTML = prod
+        ? `Selected ${String(pt.x).slice(0,16)} · value ${Number(pt.y).toPrecision(5)} · source product <a href="/products/${s.pid[i]}" class="mono">${prod}</a>` : "";
+    });
+  }
+}
+document.querySelectorAll("#ranges button").forEach(b => b.onclick = () => {
+  document.querySelectorAll("#ranges button").forEach(x => x.classList.remove("on"));
+  b.classList.add("on"); range = b.dataset.r; load();
+});
+load();
+IMF.watchStatus((st, last) => { if (last && document.getElementById("auto").checked) load(); }, 10000);
+</script>
+{% endblock %}

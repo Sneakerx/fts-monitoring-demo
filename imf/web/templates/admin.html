@@ -1,0 +1,88 @@
+{% extends "base.html" %}
+{% block title %}Administration{% endblock %}
+{% block content %}
+<h1>Administration</h1>
+
+<div class="grid g2" id="system">
+  <div class="panel">
+    <h2>System health</h2>
+    <dl class="kv">
+      <dt>PDGS endpoint</dt><dd class="mono">{{ settings.pdgs.base_url }}</dd>
+      <dt>PDGS reachable</dt><dd>{% if pdgs_status %}<span class="st NOMINAL">yes</span> <span class="sub">mission time {{ pdgs_status.sim_time[:16] }} (simulator ×{{ '%.0f'|format(pdgs_status.accel) }})</span>{% else %}<span class="st ALARM">no</span>{% endif %}</dd>
+      <dt>Product type</dt><dd>{{ settings.pdgs.product_type }} · poll every {{ settings.pdgs.poll_interval_s }} s</dd>
+      <dt>Poller</dt><dd>{{ 'running' if poll_busy else 'idle' }}</dd>
+      <dt>Database</dt><dd class="mono">{{ settings.database.url.split('///')[0] }} · {{ db_stats.products }} products · {{ db_stats.samples }} samples · {{ db_stats.reports }} reports</dd>
+      <dt>Scheduled jobs</dt><dd>{% for j in jobs %}{{ j.name }} <span class="sub">next {{ j.next|string|truncate(19, True, '') }}</span><br>{% else %}scheduler not running{% endfor %}</dd>
+    </dl>
+    <div class="toolbar" style="margin-top:12px">
+      <form method="post" action="/admin/jobs/poll" style="margin:0"><button class="btn small">Poll PDGS now</button></form>
+      <form method="post" action="/admin/jobs/reports" style="margin:0"><button class="btn small secondary">Check periodic reports</button></form>
+    </div>
+  </div>
+  <div class="panel">
+    <h2>Recent polling runs</h2>
+    <table>
+      <tr><th>Started</th><th>Trigger</th><th class="n">Found</th><th class="n">Processed</th><th class="n">Failed</th><th class="n">Skipped</th><th>Error</th></tr>
+      {% for r in polls %}
+      <tr><td>{{ r.started_at|fmts }}</td><td class="sub">{{ r.trigger }}</td><td class="n">{{ r.found }}</td><td class="n">{{ r.processed }}</td>
+          <td class="n">{{ r.failed }}</td><td class="n">{{ r.skipped }}</td><td class="sub">{{ (r.error or '')[:60] }}</td></tr>
+      {% endfor %}
+    </table>
+  </div>
+</div>
+
+<div class="panel" style="margin-top:16px" id="users">
+  <h2>Users &amp; roles</h2>
+  <div class="table-wrap"><table>
+    <tr><th>User</th><th>Name</th><th>Role</th><th>Active</th><th>New password</th><th></th><th>Last login</th></tr>
+    {% for u in users %}
+    {% set f = 'u' ~ u.id %}
+    <tr>
+      <td><form id="{{ f }}" method="post" action="/admin/users/{{ u.id }}"></form>{{ u.username }}</td><td>{{ u.full_name }}</td>
+      <td><select form="{{ f }}" name="role">{% for r in roles %}<option {{ 'selected' if r == u.role }}>{{ r }}</option>{% endfor %}</select></td>
+      <td><input form="{{ f }}" type="checkbox" name="active" value="true" {{ 'checked' if u.active }}></td>
+      <td><input form="{{ f }}" type="password" name="password" placeholder="unchanged" style="width:120px"></td>
+      <td><button form="{{ f }}" class="btn small secondary">Save</button></td>
+      <td class="sub">{{ u.last_login|fmt }}</td>
+    </tr>
+    {% endfor %}
+    <tr>
+      <td><form id="newuser" method="post" action="/admin/users"></form><input form="newuser" type="text" name="username" placeholder="username" required style="width:110px"></td>
+      <td><input form="newuser" type="text" name="full_name" placeholder="full name"></td>
+      <td><select form="newuser" name="role">{% for r in roles %}<option>{{ r }}</option>{% endfor %}</select></td>
+      <td></td><td><input form="newuser" type="password" name="password" placeholder="password" required style="width:120px"></td>
+      <td><button form="newuser" class="btn small">Add user</button></td><td></td>
+    </tr>
+  </table></div>
+  <p class="sub">Guest: dashboard, public parameters, published reports · Expert: + all parameters, products, events (acknowledge), annotations, CSV export, ad-hoc reports · Admin: + users, limits, visibility, jobs, audit log.</p>
+</div>
+
+<div class="panel" style="margin-top:16px" id="limits">
+  <h2>Parameter limits &amp; visibility <span class="sub">every change creates a new limit version and an audit entry; limits apply to new data</span></h2>
+  <div class="table-wrap"><table>
+    <tr><th>Parameter</th><th>Unit</th><th>Warn low</th><th>Warn high</th><th>Alarm low</th><th>Alarm high</th><th>Persist.</th><th>Comment</th><th></th><th>Visibility</th></tr>
+    {% for p in params %}{% set l = p.current_limit %}
+    {% set fid = 'l-' ~ p.code %}
+    <tr>
+      <td><form id="{{ fid }}" method="post" action="/admin/limits/{{ p.code }}"></form><a href="/parameters/{{ p.code }}">{{ p.name }}</a></td><td>{{ p.unit }}</td>
+      {% for f in ['warn_lo', 'warn_hi', 'alarm_lo', 'alarm_hi'] %}
+      <td><input form="{{ fid }}" class="small" name="{{ f }}" value="{{ l[f] if l and l[f] is not none }}"></td>{% endfor %}
+      <td><input form="{{ fid }}" class="small" type="number" min="1" name="persistence" value="{{ l.persistence if l else 1 }}" style="width:56px"></td>
+      <td><input form="{{ fid }}" type="text" name="comment" placeholder="reason" style="width:130px"></td>
+      <td><button form="{{ fid }}" class="btn small secondary">Save</button></td>
+      <td><form method="post" action="/admin/visibility/{{ p.code }}" style="margin:0"><button class="btn small {{ '' if p.visibility == 'public' else 'secondary' }}">{{ p.visibility }}</button></form></td>
+    </tr>
+    {% endfor %}
+  </table></div>
+</div>
+
+<div class="panel" style="margin-top:16px" id="audit">
+  <h2>Audit log <span class="sub">latest 60 entries</span></h2>
+  <div class="table-wrap"><table>
+    <tr><th>Time (UTC)</th><th>User</th><th>Action</th><th>Target</th><th>Details</th></tr>
+    {% for a in audit_rows %}
+    <tr><td>{{ a.timestamp|fmts }}</td><td>{{ a.username }}</td><td class="mono">{{ a.action }}</td><td>{{ a.target }}</td><td class="sub">{{ a.details }}</td></tr>
+    {% endfor %}
+  </table></div>
+</div>
+{% endblock %}

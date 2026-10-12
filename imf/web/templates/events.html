@@ -1,0 +1,47 @@
+{% extends "base.html" %}
+{% block title %}Events{% endblock %}
+{% block content %}
+<h1>Events <span class="sub">limit violations confirmed after persistence; lifecycle OPEN → ACKNOWLEDGED → CLOSED (once acknowledged and back to nominal)</span></h1>
+<div class="panel">
+  <form class="toolbar" method="get">
+    <select name="status">
+      {% for v, l in [('active', 'Active (open + acknowledged)'), ('OPEN', 'Open (unacknowledged)'), ('ACKNOWLEDGED', 'Acknowledged'), ('CLOSED', 'Closed'), ('', 'All')] %}
+      <option value="{{ v }}" {{ 'selected' if status == v }}>{{ l }}{% if v in counts %} ({{ counts[v] }}){% endif %}</option>{% endfor %}
+    </select>
+    <select name="severity">
+      <option value="">All severities</option>
+      {% for v in ['ALARM', 'WARNING'] %}<option {{ 'selected' if severity == v }}>{{ v }}</option>{% endfor %}
+    </select>
+    <select name="parameter">
+      <option value="">All parameters</option>
+      {% for p in params %}<option value="{{ p.code }}" {{ 'selected' if parameter == p.code }}>{{ p.name }}</option>{% endfor %}
+    </select>
+    <button class="btn small">Filter</button>
+    <span class="sub">{{ events|length }} shown</span>
+  </form>
+  <div class="table-wrap"><table>
+    <tr><th>#</th><th>Severity</th><th>Parameter</th><th>Onset (data time)</th><th class="n">Onset value</th><th class="n">Worst</th><th>Limit</th>
+        <th class="n">Violations</th><th>Cleared</th><th>Status</th><th>Acknowledgement</th></tr>
+    {% for e in events %}
+    <tr>
+      <td>{{ e.id }}</td><td><span class="st {{ e.severity }}">{{ e.severity }}</span></td>
+      <td><a href="/parameters/{{ e.parameter.code }}">{{ e.parameter.name }}</a></td>
+      <td>{{ e.time|fmt }}{% if e.product %}<br><a class="sub" href="/products/{{ e.product.id }}">orbit {{ e.product.orbit }}</a>{% endif %}</td>
+      <td class="n">{{ e.value|num }} {{ e.parameter.unit }}</td><td class="n">{{ e.worst_value|num }}</td>
+      <td>{{ e.limit_text }}</td><td class="n">{{ e.n_violations }}</td>
+      <td>{{ e.cleared_at|fmt if e.cleared_at else '' }}{% if not e.cleared_at %}<span class="tag">ongoing</span>{% endif %}</td>
+      <td><span class="st {{ e.status }}">{{ e.status }}</span></td>
+      <td>
+        {% if e.status == 'OPEN' %}
+        <form method="post" action="/events/{{ e.id }}/ack" style="display:flex;gap:4px;margin:0">
+          <input type="hidden" name="next" value="{{ request.url.path }}?{{ request.url.query }}">
+          <input type="text" name="comment" placeholder="comment / action" style="width:160px">
+          <button class="btn small">Ack</button>
+        </form>
+        {% else %}<span class="sub">{{ e.ack_by }} · {{ e.ack_at|fmt }}</span>{% if e.comment %}<br>{{ e.comment }}{% endif %}{% endif %}
+      </td>
+    </tr>
+    {% else %}<tr><td colspan="11" class="muted">No events match the filter.</td></tr>{% endfor %}
+  </table></div>
+</div>
+{% endblock %}

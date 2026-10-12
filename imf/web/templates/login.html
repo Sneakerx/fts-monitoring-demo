@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Login · Instrument Monitoring Facility</title>
+<link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/static/imf.css">
+</head>
+<body>
+<div class="login-wrap">
+  <form class="login" method="post" action="/login">
+    <div class="brand" style="color:var(--ink)"><div class="logo"></div><div>Instrument Monitoring Facility<small style="color:var(--muted)">{{ mission.name }}</small></div></div>
+    <h1>Sign in</h1>
+    {% if error %}<div class="flash error">{{ error }}</div>{% endif %}
+    <input type="hidden" name="next" value="{{ next }}">
+    <label for="u">Username</label><input id="u" type="text" name="username" autofocus required>
+    <label for="p">Password</label><input id="p" type="password" name="password" required>
+    <div style="margin-top:18px"><button class="btn" style="width:100%">Sign in</button></div>
+    <div class="demo">
+      Demo accounts (prototype only):<br>
+      {% for r in ['admin', 'expert', 'guest'] %}
+      <button type="button" class="btn secondary small" onclick="u.value='{{ r }}';p.value='{{ r }}';this.form.submit()">{{ r }}</button>
+      {% endfor %}
+      <p style="margin:10px 0 0">Operational deployment: single sign-on via the agency identity provider (OIDC).</p>
+    </div>
+  </form>
+</div>
+</body>
+</html>

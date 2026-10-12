@@ -1,0 +1,139 @@
+# ---------------------------------------------------------------------------
+# Instrument Monitoring Facility (IMF) - configuration
+# All relative paths are resolved against the project root.
+# ---------------------------------------------------------------------------
+
+mission:
+  name: "FTS-1 (demonstration mission)"
+  instrument: "FTS - Fourier-Transform Spectrometer"
+  orbit_period_min: 101.0
+
+pdgs:
+  # OData-like product catalogue (here: the bundled PDGS simulator).
+  # Switching to an operational PDGS = change URL + product type (+ auth).
+  base_url: "http://127.0.0.1:8100/odata/v1"
+  product_type: "FTS_L1B"
+  poll_interval_s: 20
+  page_size: 100
+  download_dir: "data/products"
+  keep_products: false
+  timeout_s: 30
+  retries: 3
+
+database:
+  # Demo: SQLite. Operations: e.g. postgresql+psycopg://imf@dbhost/imf (TimescaleDB for samples)
+  url: "sqlite:///data/imf.db"
+
+web:
+  host: "127.0.0.1"
+  port: 8000
+  secret_key: "change-me-in-operations"
+  session_max_age_s: 28800
+
+reporting:
+  output_dir: "data/reports"
+  check_interval_s: 30
+  # A period is considered complete once data has been received this long after its end
+  completeness_margin_h: 4
+  # How many past periods to (re)generate if missing, e.g. after the initial backfill
+  daily_backfill: 3
+  weekly_backfill: 2
+  auto_publish: true
+
+notifications:
+  log_file: "data/notifications.log"
+  min_severity: "WARNING"
+  smtp_host: null          # e.g. smtp.example.org - disabled in the demo
+  smtp_port: 25
+  sender: "imf@example.org"
+  recipients: ["instrument-team@example.org"]
+
+users:
+  - {username: admin,  password: admin,  role: admin,  full_name: "IMF Administrator"}
+  - {username: expert, password: expert, role: expert, full_name: "Instrument Expert"}
+  - {username: guest,  password: guest,  role: guest,  full_name: "Guest User"}
+
+# Instrument characterisation data used by the parameter algorithms
+# (in operations: an auxiliary data file under configuration control)
+characterisation:
+  laser_nominal_nm: 1550.0
+  zpd_nominal_sample: 2048
+  nominal_scans_per_product: 30
+  spectral_line_ref_cm1: 712.0
+  ice_absorption_center_cm1: 830.0
+  ice_absorption_sigma_cm1: 60.0
+  reference_gain:            # counts per mW/(m2 sr cm-1): g0 * (1 + slope * (nu - nu_mid)/(nu_max - nu_min))
+    B1: {g0: 1000.0, slope: 0.10}
+    B2: {g0: 1500.0, slope: -0.05}
+    B3: {g0: 4000.0, slope: 0.08}
+
+# ---------------------------------------------------------------------------
+# Monitoring parameters. 'algorithm' refers to a registered plug-in output.
+# 'limits' are the initial limits; afterwards they are maintained in the DB
+# by administrators (versioned + audited).
+# visibility: public (guests) | restricted (experts/admins)
+# ---------------------------------------------------------------------------
+parameters:
+  # --- Radiometric --------------------------------------------------------
+  - {code: NESR_B1, name: "NESR Band 1", unit: "nW/(cm²·sr·cm⁻¹)", group: Radiometric, visibility: public,
+     description: "Noise-equivalent spectral radiance, median over band 1 (645-1210 cm-1), from calibrated deep-space views",
+     limits: {warn_hi: 30.0, alarm_hi: 35.0, persistence: 2}}
+  - {code: NESR_B2, name: "NESR Band 2", unit: "nW/(cm²·sr·cm⁻¹)", group: Radiometric, visibility: public,
+     description: "Noise-equivalent spectral radiance, median over band 2 (1210-2000 cm-1)",
+     limits: {warn_hi: 12.0, alarm_hi: 14.0, persistence: 2}}
+  - {code: NESR_B3, name: "NESR Band 3", unit: "nW/(cm²·sr·cm⁻¹)", group: Radiometric, visibility: public,
+     description: "Noise-equivalent spectral radiance, median over band 3 (2000-2760 cm-1)",
+     limits: {warn_hi: 3.6, alarm_hi: 4.2, persistence: 2}}
+  - {code: GAIN_DRIFT_B1, name: "Radiometric gain drift B1", unit: "%", group: Radiometric, visibility: restricted,
+     description: "Mean relative deviation of the on-board calibration gain from the reference (band 1)",
+     limits: {warn_lo: -5.0, alarm_lo: -8.0, warn_hi: 3.0, alarm_hi: 5.0, persistence: 2}}
+  - {code: GAIN_DRIFT_B2, name: "Radiometric gain drift B2", unit: "%", group: Radiometric, visibility: restricted,
+     description: "Mean relative deviation of the on-board calibration gain from the reference (band 2)",
+     limits: {warn_lo: -3.0, alarm_lo: -5.0, warn_hi: 3.0, alarm_hi: 5.0, persistence: 2}}
+  - {code: GAIN_DRIFT_B3, name: "Radiometric gain drift B3", unit: "%", group: Radiometric, visibility: restricted,
+     description: "Mean relative deviation of the on-board calibration gain from the reference (band 3)",
+     limits: {warn_lo: -3.0, alarm_lo: -5.0, warn_hi: 3.0, alarm_hi: 5.0, persistence: 2}}
+  - {code: ICE_LOSS, name: "Ice contamination transmission loss", unit: "%", group: Radiometric, visibility: public,
+     description: "Peak transmission loss at 830 cm-1 retrieved from the spectral shape of the band-1 gain (ice on cold optics)",
+     limits: {warn_hi: 6.0, alarm_hi: 8.0, persistence: 3}}
+  # --- Spectral -----------------------------------------------------------
+  - {code: SPEC_SHIFT, name: "Spectral calibration shift", unit: "ppm", group: Spectral, visibility: public,
+     description: "Relative shift of the 712 cm-1 reference line centroid in the high-resolution calibration window",
+     limits: {warn_lo: -2.0, warn_hi: 2.0, alarm_lo: -4.0, alarm_hi: 4.0, persistence: 2}}
+  - {code: LASER_DRIFT, name: "Metrology laser wavelength drift", unit: "ppm", group: Spectral, visibility: restricted,
+     description: "Deviation of the reference laser wavelength from nominal (1550 nm)",
+     limits: {warn_lo: -2.0, warn_hi: 2.0, alarm_lo: -3.0, alarm_hi: 3.0, persistence: 2}}
+  - {code: ILS_FWHM, name: "ILS width (FWHM)", unit: "cm⁻¹", group: Spectral, visibility: restricted,
+     description: "Full width at half maximum of the instrument line shape from the reference line",
+     limits: {warn_hi: 0.30, alarm_hi: 0.32, persistence: 3}}
+  # --- Interferometric ----------------------------------------------------
+  - {code: ZPD_OFFSET, name: "ZPD position offset", unit: "samples", group: Interferometric, visibility: restricted,
+     description: "Mean offset of the zero-path-difference position from the nominal sample",
+     limits: {warn_lo: -3.0, warn_hi: 3.0, alarm_lo: -5.0, alarm_hi: 5.0, persistence: 2}}
+  - {code: IFG_PEAK_AMP, name: "Interferogram peak amplitude", unit: "DN", group: Interferometric, visibility: restricted,
+     description: "Mean interferogram centre-burst amplitude (throughput indicator)",
+     limits: {warn_lo: 27000.0, alarm_lo: 25000.0, persistence: 2}}
+  - {code: SCAN_SPEED_STAB, name: "Scan speed stability", unit: "%", group: Interferometric, visibility: restricted,
+     description: "Relative standard deviation of the corner-cube scan speed (micro-vibration indicator)",
+     limits: {warn_hi: 0.8, alarm_hi: 1.2, persistence: 1}}
+  # --- Thermal ------------------------------------------------------------
+  - {code: T_DETECTOR, name: "Detector temperature", unit: "K", group: Thermal, visibility: public,
+     description: "Mean focal-plane detector temperature (cryocooler performance)",
+     limits: {warn_lo: 89.0, warn_hi: 91.0, alarm_lo: 88.5, alarm_hi: 92.0, persistence: 2}}
+  - {code: T_BEAMSPLITTER, name: "Beamsplitter temperature", unit: "K", group: Thermal, visibility: restricted,
+     description: "Mean beamsplitter temperature",
+     limits: {warn_lo: 292.0, warn_hi: 294.5, alarm_lo: 291.0, alarm_hi: 295.0, persistence: 2}}
+  - {code: T_BLACKBODY, name: "On-board blackbody temperature", unit: "K", group: Thermal, visibility: public,
+     description: "Mean on-board calibration blackbody temperature",
+     limits: {warn_lo: 289.5, warn_hi: 290.5, alarm_lo: 289.0, alarm_hi: 291.0, persistence: 2}}
+  # --- Data quality -------------------------------------------------------
+  - {code: VALID_RATIO, name: "Valid spectra ratio", unit: "%", group: Data quality, visibility: public,
+     description: "Fraction of earth-view spectra with a nominal quality flag",
+     limits: {warn_lo: 97.0, alarm_lo: 95.0, persistence: 2}}
+  - {code: MISSING_SCANS, name: "Missing scans", unit: "count", group: Data quality, visibility: restricted,
+     description: "Number of missing earth-view scans w.r.t. the nominal scan plan",
+     limits: {warn_hi: 2.5, alarm_hi: 4.5, persistence: 1}}
+  # --- Geometric ----------------------------------------------------------
+  - {code: COREG_OFFSET, name: "Co-registration offset", unit: "km", group: Geometric, visibility: public,
+     description: "Mean co-registration offset of the FTS footprints w.r.t. the reference imager",
+     limits: {warn_hi: 0.5, alarm_hi: 0.75, persistence: 3}}

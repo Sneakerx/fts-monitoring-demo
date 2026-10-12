@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{% block title %}IMF{% endblock %} · {{ mission.name }}</title>
+<link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/static/imf.css">
+<script src="/static-vendor/plotly.min.js"></script>
+<script src="/static/imf.js"></script>
+</head>
+<body>
+<header class="topbar">
+  <div class="brand"><div class="logo"></div><div>Instrument Monitoring Facility<small>{{ mission.name }} · {{ mission.instrument }}</small></div></div>
+  <nav class="nav">
+    {% macro nav(href, label) %}<a href="{{ href }}" class="{{ 'active' if (path == href or (href != '/' and path.startswith(href))) else '' }}">{{ label }}</a>{% endmacro %}
+    {{ nav('/', 'Dashboard') }}
+    {{ nav('/parameters', 'Parameters') }}
+    {{ nav('/explorer', 'Explorer') }}
+    {% if user.is_expert %}{{ nav('/events', 'Events') }}{{ nav('/products', 'Products') }}{% endif %}
+    {{ nav('/reports', 'Reports') }}
+    {% if user.is_admin %}{{ nav('/admin', 'Admin') }}{% endif %}
+  </nav>
+  <div class="userbox">
+    <span class="live" id="live"><span class="pulse"></span><span class="txt">…</span></span>
+    <span title="{{ user.full_name }}">{{ user.username }}</span><span class="role {{ user.role }}">{{ user.role }}</span>
+    <form method="post" action="/logout" style="margin:0"><button>Logout</button></form>
+  </div>
+</header>
+<main>
+  {% if flash %}<div class="flash {{ flash.kind }}">{{ flash.message }}</div>{% endif %}
+  {% block content %}{% endblock %}
+</main>
+<script>
+  window.addEventListener("load", () => { if (!window.IMF_CUSTOM_WATCH) IMF.watchStatus(null, 15000); });
+</script>
+{% block scripts %}{% endblock %}
+</body>
+</html>

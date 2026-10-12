@@ -1,0 +1,48 @@
+{% extends "base.html" %}
+{% block title %}Reports{% endblock %}
+{% block content %}
+<h1>Reports <span class="sub">daily and weekly reports are generated automatically once a period is complete{% if not user.is_expert %}; guests see published reports{% endif %}</span></h1>
+<div class="grid g-side">
+  <div class="panel">
+    <div class="toolbar">
+      <div class="seg">
+        <a href="/reports" class="{{ 'on' if not kind }}">all</a>
+        <a href="/reports?kind=daily" class="{{ 'on' if kind == 'daily' }}">daily</a>
+        <a href="/reports?kind=weekly" class="{{ 'on' if kind == 'weekly' }}">weekly</a>
+        <a href="/reports?kind=adhoc" class="{{ 'on' if kind == 'adhoc' }}">ad-hoc</a>
+      </div>
+    </div>
+    <div class="table-wrap"><table>
+      <tr><th>Status</th><th>Report</th><th>Type</th><th>Period (UTC)</th><th class="n">Products</th><th class="n">Events</th><th>Created</th><th></th>{% if user.is_admin %}<th>Published</th>{% endif %}</tr>
+      {% for r in reports %}
+      <tr {% if request.query_params.get('highlight') == r.id|string %}style="background:var(--accent-weak)"{% endif %}>
+        <td><span class="st {{ r.overall_status }}">{{ r.overall_status }}</span></td>
+        <td><a href="/reports/{{ r.id }}/view" target="_blank">{{ r.title }}</a></td>
+        <td><span class="tag">{{ r.kind }}</span></td>
+        <td>{{ r.period_start|fmt }} – {{ r.period_end|fmt }}</td>
+        <td class="n">{{ r.n_products }}</td><td class="n">{{ r.n_events }}</td>
+        <td class="sub">{{ r.created_at|fmt }} · {{ r.created_by }}</td>
+        <td><a href="/reports/{{ r.id }}/view" target="_blank">HTML</a> · <a href="/reports/{{ r.id }}/pdf">PDF</a></td>
+        {% if user.is_admin %}<td><form method="post" action="/admin/reports/{{ r.id }}/publish" style="margin:0">
+          <button class="btn small {{ '' if r.published else 'secondary' }}">{{ 'published' if r.published else 'internal' }}</button></form></td>{% endif %}
+      </tr>
+      {% else %}<tr><td colspan="9" class="muted">No reports yet.</td></tr>{% endfor %}
+    </table></div>
+  </div>
+  {% if user.is_expert %}
+  <div class="panel" style="align-self:start">
+    <h2>Ad-hoc report</h2>
+    <form method="post" action="/reports/generate">
+      <p class="sub">Relative to the latest data ({{ latest|fmt }} UTC).</p>
+      <p>
+        {% for v, l in [('1d', 'Last 24 h'), ('7d', 'Last 7 days'), ('30d', 'Last 30 days'), ('custom', 'Custom period')] %}
+        <label style="display:block"><input type="radio" name="span" value="{{ v }}" {{ 'checked' if v == '7d' }}> {{ l }}</label>{% endfor %}
+      </p>
+      <p><input type="datetime-local" name="start"> – <input type="datetime-local" name="end"></p>
+      {% if user.is_admin %}<p><label><input type="checkbox" name="publish" value="true"> publish to guests</label></p>{% endif %}
+      <button class="btn" onclick="this.textContent='Generating…'">Generate</button>
+    </form>
+  </div>
+  {% endif %}
+</div>
+{% endblock %}
