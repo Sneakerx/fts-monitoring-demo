@@ -60,6 +60,15 @@ flowchart TB
 | Report service | `imf/reporting/` | Data-time-driven scheduling (a period is reported once complete), statistics, events, trend plots; self-contained HTML and PDF. |
 | Web portal / API | `imf/web/` | Dashboard, parameter browser, explorer, products, events, reports, administration; JSON API (OpenAPI at `/api/docs`). |
 
+**Planned components** (see [feature_gap_analysis.md](feature_gap_analysis.md), section 6):
+* a *reader registry* with one reader per product type (L0 BB/DS/EO, AUX, AUXEFSI, L1B);
+* *windowed analyses* across products and parameters;
+* a *rule engine* with product, limit and trend triggers;
+* the *mission timeline*;
+* *output generators* with expert approval;
+* *reprocessing campaigns*;
+* an *MDB admin CLI*.
+
 ## 4. Data flow per product
 
 ```mermaid
@@ -108,6 +117,12 @@ erDiagram
   for long-range plots, retention/compression policies.
 * `limits` are **versioned** (never updated in place): who changed what, when and why.
 * Full traceability: every sample and event references the source product.
+* **Planned extensions** (see [feature_gap_analysis.md](feature_gap_analysis.md), section 5):
+  * product level, baseline, versions, checksum and header;
+  * sample dimensions and entry attributes (type, source, entry time);
+  * new tables: `VECTOR_SAMPLES`, `TIMELINE_ENTRIES`, `REQUIREMENTS`, `PROPOSED_OUTPUTS`,
+    `PRODUCT_LINKS`, `CAMPAIGNS`;
+  * schema migrations with Alembic.
 
 ## 6. Events
 
@@ -119,6 +134,11 @@ erDiagram
 | Clearing | Back to nominal (with persistence) sets *cleared* time |
 | Lifecycle | OPEN → ACKNOWLEDGED (expert, with comment) → CLOSED once acknowledged and cleared |
 | Notification | On raise and clear; minimum severity configurable |
+
+**Planned:** event categories `limit`, `timeline` and `action`, raised by a rule registry with
+product, limit and trend triggers. Action events carry a recommended action and, where possible, a
+*proposed output* (for example a laser wavenumber or a draft NESR AUX file) that an expert approves
+or rejects. See [feature_gap_analysis.md](feature_gap_analysis.md), section 4 (events E1–E6).
 
 ## 7. Users and roles
 
@@ -161,3 +181,7 @@ limits and visibility are subsequently maintained by administrators in the DB.
   feeding the same parameter/sample model.
 * **Derived analyses**: correlations, long-term trend fitting, prediction of limit crossings
   (e.g. "ice loss will reach the alarm limit in ~12 days" – decontamination planning).
+
+The requested extensions (new input types, MDB requirements, events) are analysed item by item
+in [feature_gap_analysis.md](feature_gap_analysis.md), with a phased roadmap. The container
+deployment of the demonstrator is described in [DOCKER.md](../DOCKER.md).
