@@ -1,0 +1,35 @@
+The following shall be monitored as a minimum:
+
+- Catalogue of nominal L0 data (just header information of black body, deep space and earth products for FTS and ancillary data)
+- Catalogue of nominal L1 data, i.e. could the data be processed from L0 to L1
+- Quality data in Level 1 products: NESR index (spectrally binned, but available for n sub-bands for each spectrogram), FTS scan direction, quality flags, NESR spectrally resolved but averaged over several spectrograms of one orbit
+- Geometric data of the spectrogram: lat, lon
+- Temperature stability of two types of sensors (correlate them)
+- Optical transmission estimation from gain or deep space measurements
+- ZPD offset monitoring by ZPR determined during L1 processing versus Ancillary data determining turn-around positions. Correlate to on-board fringe counter.
+- Compute statistics of SSD versus requirement
+- Plot NESR versus spectral template
+- Plot NESR index trend over time
+
+
+Requirements
+- Manually populate MDB with new parameters, supported by external files, if necessary. (What could be a use-case for this? Maybe the mission timeline.)
+- MDB entries shall have associated attributes: entry type, entry source, entry time
+- MDB shall be able to handle/distinguish/store different product versions and baselines
+- It shall be possible to add/remove part of the MDB
+- MDB Export shall be possible
+- Generation and maintenance of mission timeline including events. (No foreseen interface to FOS. Timeline generation shall be maximaized by systematic analysis of PDGS data)
+- Reprocessing shall be possible on the full mission in case of re-processed products, in parallel to nominal IMF operation
+- Allow integration of externally developed data processing tools (through an API)
+- Linux O/S
+- Data of full mission to be stored (MDB, extracted timeline, generated files and reports) (ingested products TBC, the hash should be sufficient?)
+- MDB backup, repair and restore
+
+
+Events:
+- AUXEFSI product detected -> special calibration mode was run (Event for mission timeline)
+- Sepctral calibration threshold reached -> update visible laser wavenumber
+- Radiometric feature detected with impact on ISRF -> update radiometric scaling for ISRF
+- Delay between ref and science signal -> update complex transfer function
+- ZPD drift -> send telecommand
+- NESR drift -> update NESR AUX file feeding L1 quality
