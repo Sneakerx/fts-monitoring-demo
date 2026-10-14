@@ -9,15 +9,28 @@
   </div>
 </div>
 <div class="grid g-side">
-  <div class="panel">
-    <h2>Derived parameters (traceability product → parameter)</h2>
-    <table>
-      <tr><th>Level</th><th>Group</th><th>Parameter</th><th class="n">Value</th><th>Unit</th></tr>
-      {% for smp, par in samples %}
-      <tr><td><span class="st {{ LEVEL_CLASS[smp.level] }}">{{ LEVEL_CLASS[smp.level] }}</span></td><td>{{ par.group }}</td>
-          <td><a href="/parameters/{{ par.code }}">{{ par.name }}</a></td><td class="n">{{ smp.value|num }}</td><td>{{ par.unit }}</td></tr>
-      {% else %}<tr><td colspan="5" class="muted">No parameters derived (product failed).</td></tr>{% endfor %}
-    </table>
+  <div class="grid" style="align-content:start">
+    <div class="panel">
+      <h2>Derived parameters (traceability product → parameter)</h2>
+      <div class="table-wrap"><table>
+        <tr><th>Level</th><th>Group</th><th>Parameter</th><th>Series</th><th class="n">Value</th><th>Unit</th><th>Source</th></tr>
+        {% for smp, par in samples %}
+        <tr><td><span class="st {{ LEVEL_CLASS[smp.level] }}">{{ LEVEL_CLASS[smp.level] }}</span></td><td>{{ par.group }}</td>
+            <td><a href="/parameters/{{ par.code }}">{{ par.name }}</a></td><td class="mono sub">{{ smp.dims }}</td>
+            <td class="n">{{ smp.value|num }}</td><td>{{ par.unit }}</td><td class="sub mono">{{ smp.source }}</td></tr>
+        {% else %}<tr><td colspan="7" class="muted">No parameters derived{{ ' (product failed)' if prod.status == 'FAILED' }}.</td></tr>{% endfor %}
+      </table></div>
+      {% if vectors %}
+      <h2 style="margin-top:14px">Spectra / profiles</h2>
+      <table>{% for vs, par in vectors %}<tr><td><a href="/parameters/{{ par.code }}">{{ par.name }}</a></td><td class="mono sub">{{ vs.dims }}</td><td class="sub">{{ (vs.values|fromjson)|length }} points</td><td class="sub mono">{{ vs.source }}</td></tr>{% endfor %}</table>
+      {% endif %}
+    </div>
+    {% if prod.header %}
+    <div class="panel">
+      <h2>Header / catalogue attributes</h2>
+      <dl class="kv">{% for k, v in (prod.header|fromjson).items() %}<dt class="mono">{{ k }}</dt><dd>{{ v }}</dd>{% endfor %}</dl>
+    </div>
+    {% endif %}
   </div>
   <div class="grid" style="align-content:start">
     <div class="panel">
@@ -25,18 +38,26 @@
       <dl class="kv">
         <dt>Status</dt><dd><span class="st {{ prod.status }}">{{ prod.status }}</span></dd>
         <dt>PDGS Id</dt><dd class="mono">{{ prod.pdgs_id }}</dd>
-        <dt>Type</dt><dd>{{ prod.product_type }}</dd>
-        <dt>Orbit</dt><dd>{{ prod.orbit }}</dd>
+        <dt>Type / level</dt><dd>{{ prod.product_type }} · {{ prod.level }}</dd>
+        <dt>Baseline</dt><dd>{{ prod.baseline or 'independent' }}{% if prod.processor_version %} · processor {{ prod.processor_version }}{% endif %}{% if prod.product_version %} · version {{ prod.product_version }}{% endif %}</dd>
+        {% if prod.campaign_id %}<dt>Campaign</dt><dd>#{{ prod.campaign_id }} (reprocessing)</dd>{% endif %}
+        <dt>Orbit</dt><dd>{{ prod.orbit or '–' }}</dd>
         <dt>Sensing</dt><dd>{{ prod.sensing_start|fmts }}<br>{{ prod.sensing_stop|fmts }}</dd>
         <dt>Published</dt><dd>{{ prod.publication_date|fmts }}</dd>
         <dt>Ingested</dt><dd>{{ prod.ingested_at|fmts }}</dd>
+        <dt>SHA-256</dt><dd class="mono" style="word-break:break-all">{{ prod.checksum or 'header only (not downloaded)' }}</dd>
         <dt>Processing</dt><dd>{{ '%.0f'|format(prod.processing_ms or 0) }} ms</dd>
         {% if prod.error %}<dt>Error</dt><dd class="mono" style="color:var(--alarm)">{{ prod.error }}</dd>{% endif %}
       </dl>
     </div>
     <div class="panel">
+      <h2>Linked products</h2>
+      <table>{% for link, other in links %}<tr><td><span class="tag">{{ link.relation }}</span></td><td><a class="mono" href="/products/{{ other.id }}">{{ other.name }}</a></td></tr>
+      {% else %}<tr><td class="muted">None</td></tr>{% endfor %}</table>
+    </div>
+    <div class="panel">
       <h2>Events raised by this product</h2>
-      <table>{% for e in events %}<tr><td><span class="st {{ e.severity }}">{{ e.severity }}</span></td><td>{{ e.parameter.name }}</td><td>{{ e.limit_text }}</td></tr>
+      <table>{% for e in events %}<tr><td><span class="st {{ e.severity }}">{{ e.severity }}</span></td><td><a href="/events/{{ e.id }}">{{ e.label }}</a></td><td>{{ e.limit_text }}</td></tr>
       {% else %}<tr><td class="muted">None</td></tr>{% endfor %}</table>
     </div>
   </div>

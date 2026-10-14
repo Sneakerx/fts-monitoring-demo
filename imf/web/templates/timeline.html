@@ -1,0 +1,76 @@
+{% extends "base.html" %}
+{% block title %}Mission timeline{% endblock %}
+{% block content %}
+<h1>Mission timeline <span class="sub">generated systematically from the PDGS data (gaps, calibration modes, anomalies, actions) and maintained by the experts</span></h1>
+<div class="panel" style="margin-bottom:16px">
+  <div class="toolbar">
+    <div class="seg" id="ranges">
+      {% for r in ['7d', '30d', 'all'] %}<button data-r="{{ r }}" class="{{ 'on' if r == 'all' }}">{{ r }}</button>{% endfor %}
+    </div>
+    <span class="sub">hover a bar for details</span>
+  </div>
+  <div id="chart" class="chart" style="height:330px"></div>
+</div>
+
+<div class="grid g-side">
+  <div class="panel">
+    <form class="toolbar" method="get">
+      <select name="type" onchange="this.form.submit()">
+        <option value="">All types</option>
+        {% for t, label in types.items() %}<option value="{{ t }}" {{ 'selected' if type == t }}>{{ label }}{% if t in counts %} ({{ counts[t] }}){% endif %}</option>{% endfor %}
+      </select>
+      <span class="sub">{{ entries|length }} entries (latest first)</span>
+    </form>
+    <div class="table-wrap"><table>
+      <tr><th>Start (UTC)</th><th>Stop</th><th>Type</th><th>Entry</th><th>Source</th>{% if user.is_admin %}<th></th>{% endif %}</tr>
+      {% for e in entries %}
+      <tr><td>{{ e.start|fmt }}</td><td>{{ e.stop|fmt if e.stop else 'ongoing' }}</td><td><span class="tag">{{ e.type }}</span></td>
+          <td>{{ e.title }}{% if e.event_id and user.is_expert %} <a class="sub" href="/events/{{ e.event_id }}">event #{{ e.event_id }}</a>{% endif %}{% if e.product_id and user.is_expert %} <a class="sub" href="/products/{{ e.product_id }}">product</a>{% endif %}</td>
+          <td class="sub">{{ e.source }}{% if e.rule %} · {{ e.rule }}{% endif %}{% if e.source != 'auto' %} · {{ e.author }}{% endif %}</td>
+          {% if user.is_admin %}<td><form method="post" action="/timeline/{{ e.id }}/delete" style="margin:0" onsubmit="return confirm('Delete timeline entry #{{ e.id }}?')"><button class="btn small secondary">delete</button></form></td>{% endif %}</tr>
+      {% else %}<tr><td colspan="6" class="muted">No timeline entries.</td></tr>{% endfor %}
+    </table></div>
+  </div>
+  {% if user.is_expert %}
+  <div class="panel" style="align-self:start">
+    <h2>Add entry</h2>
+    <form method="post" action="/timeline">
+      <p><select name="type" style="width:100%">{% for t in ['MANUAL', 'OPERATIONS', 'CALIBRATION_MODE', 'ANOMALY'] %}<option value="{{ t }}">{{ types[t] }}</option>{% endfor %}</select></p>
+      <p><input type="text" name="title" placeholder="e.g. decontamination, orbit manoeuvre" required style="width:100%"></p>
+      <p><input type="text" name="start" placeholder="start YYYY-MM-DDTHH:MM" required style="width:100%"></p>
+      <p><input type="text" name="stop" placeholder="stop (optional)" style="width:100%"></p>
+      <button class="btn small">Add</button>
+    </form>
+    <p class="sub" style="margin-top:12px">There is no interface to the FOS: operations events can be entered here, imported as CSV (Admin → MDB management) or written by external tools via <span class="mono">POST /api/v1/timeline</span>.</p>
+  </div>
+  {% endif %}
+</div>
+{% endblock %}
+{% block scripts %}
+<script>
+const COLORS = { DATA_GAP: "#5b6675", L1_GAP: "#d1495b", CALIBRATION_MODE: "#8e3b9a", ANOMALY: "#c62828",
+                 ACTION: "#e9a03b", BASELINE: "#2a9d8f", MANUAL: "#1f5fa8", OPERATIONS: "#3d5a80" };
+let range = "all";
+async function load() {
+  const d = await IMF.json(`/api/timeline?range=${range}`);
+  if (!d) return;
+  const types = Object.keys(d.types).filter(t => d.entries.some(e => e.type === t));
+  const end = d.latest || new Date().toISOString();
+  const traces = types.map(t => {
+    const es = d.entries.filter(e => e.type === t);
+    return { type: "bar", orientation: "h", name: d.types[t], y: es.map(() => t), base: es.map(e => e.start),
+      x: es.map(e => Math.max(new Date(e.stop || end) - new Date(e.start), 30 * 60 * 1000)),
+      marker: { color: COLORS[t] || "#888" }, text: es.map(e => e.title), textposition: "none",
+      hovertemplate: "%{text}<br>from %{base|%Y-%m-%d %H:%M}<extra></extra>" };
+  });
+  Plotly.react("chart", traces, { barmode: "overlay", margin: { l: 130, r: 16, t: 10, b: 30 }, showlegend: false,
+    xaxis: { type: "date", gridcolor: IMF.C.grid, range: d.start && d.end ? [d.start, d.end] : undefined },
+    yaxis: { automargin: true }, paper_bgcolor: "rgba(0,0,0,0)", plot_bgcolor: "#fff", font: { size: 11 } }, IMF.cfg);
+}
+document.querySelectorAll("#ranges button").forEach(b => b.onclick = () => {
+  document.querySelectorAll("#ranges button").forEach(x => x.classList.remove("on"));
+  b.classList.add("on"); range = b.dataset.r; load();
+});
+load();
+</script>
+{% endblock %}

@@ -10,13 +10,21 @@ mission:
 
 pdgs:
   # OData-like product catalogue (here: the bundled PDGS simulator).
-  # Switching to an operational PDGS = change URL + product type (+ auth).
+  # Switching to an operational PDGS = change URL + product types (+ auth).
   base_url: "http://127.0.0.1:8100/odata/v1"
-  product_type: "FTS_L1B"
+  baseline: "B03"            # nominal L1 processing baseline (reprocessed baselines via campaigns)
+  # mode header: only the catalogue attributes (header information) are ingested, no download
+  product_types:
+    - {type: FTS_L0_BB, level: L0,  mode: header}   # L0 black-body views
+    - {type: FTS_L0_DS, level: L0,  mode: header}   # L0 deep-space views
+    - {type: FTS_L0_EO, level: L0,  mode: header}   # L0 earth views
+    - {type: AUX_ANC,   level: AUX, mode: full}     # ancillary data (turn-around positions, fringe counter)
+    - {type: AUX_EFSI,  level: AUX, mode: header}   # special calibration mode
+    - {type: FTS_L1B,   level: L1,  mode: full}     # Level-1b (nominal baseline only)
   poll_interval_s: 20
   page_size: 100
   download_dir: "data/products"
-  keep_products: false
+  keep_products: false       # only the SHA-256 checksum of each downloaded product is kept
   timeout_s: 30
   retries: 3
 
@@ -40,6 +48,14 @@ reporting:
   weekly_backfill: 2
   auto_publish: true
 
+processing:
+  outputs_dir: "data/outputs"    # proposed outputs (AUX file drafts, CTF updates, telecommand proposals)
+  backup_dir: "data/backups"
+  export_dir: "data/exports"
+  analysis_margin_h: 4           # a day is analysed once all input types have data this far beyond it
+  plugin_modules: []             # further algorithm / rule / analysis modules (Python import paths)
+  external_tools: []             # e.g. {name: my_tool, command: [python, tools/my_tool.py], outputs: [MY_PARAM]}
+
 notifications:
   log_file: "data/notifications.log"
   min_severity: "WARNING"
@@ -53,12 +69,16 @@ users:
   - {username: expert, password: expert, role: expert, full_name: "Instrument Expert"}
   - {username: guest,  password: guest,  role: guest,  full_name: "Guest User"}
 
-# Instrument characterisation data used by the parameter algorithms
+# Instrument characterisation data used by the parameter algorithms and rules
 # (in operations: an auxiliary data file under configuration control)
 characterisation:
   laser_nominal_nm: 1550.0
   zpd_nominal_sample: 2048
+  turnaround_nominal_sample: 1024.0
+  fringes_nominal: 16384
   nominal_scans_per_product: 30
+  scan_speed_cm_s: 1.0
+  ref_sci_delay_nominal_us: 2.0
   spectral_line_ref_cm1: 712.0
   ice_absorption_center_cm1: 830.0
   ice_absorption_sigma_cm1: 60.0
@@ -67,10 +87,28 @@ characterisation:
     B2: {g0: 1500.0, slope: -0.05}
     B3: {g0: 4000.0, slope: 0.08}
 
+# Reference data imported into the MDB at start-up if not present (versioned; re-import via Admin / CLI)
+reference_data:
+  - {name: NESR_TEMPLATE, file: "config/reference/nesr_template.csv", unit: "nW/(cm²·sr·cm⁻¹)",
+     description: "Expected spectral NESR per band (instrument requirement / on-ground characterisation)"}
+
+# Rules: trigger -> recommended action (+ proposed output for expert approval). Defaults in imf/monitoring/fts_rules.py
+# Trend rules: Theil-Sen slope over window_days, evaluated every step_hours of data time; raised after
+# confirm_steps evaluations above the threshold, cleared below clear_ratio x threshold (hysteresis).
+rules:
+  E2_LASER_WAVENUMBER: {watch: SPEC_SHIFT}
+  E3_ISRF_SCALING:     {watch: ISRF_FEATURE}
+  E4_CTF_UPDATE:       {watch: REF_SCI_DELAY}
+  E5_ZPD_DRIFT:        {parameter: ZPD_OFFSET, window_days: 10, max_slope_per_day: 0.035, min_samples: 40,
+                        step_hours: 12, confirm_steps: 2, clear_ratio: 0.5, lead_days: 7}
+  E6_NESR_DRIFT:       {parameter: NESR_IDX_MEAN, window_days: 10, max_slope_per_day: 0.002, min_samples: 40,
+                        step_hours: 12, confirm_steps: 2, clear_ratio: 0.5}
+
 # ---------------------------------------------------------------------------
-# Monitoring parameters. 'algorithm' refers to a registered plug-in output.
-# 'limits' are the initial limits; afterwards they are maintained in the DB
-# by administrators (versioned + audited).
+# Monitoring parameters. 'algorithm' refers to a registered plug-in output (algorithm or analysis).
+# 'limits' are the initial limits; afterwards they are maintained in the DB by administrators
+# (versioned + audited). 'dims' names the series dimensions of a parameter (one series per value
+# combination); 'kind: vector' parameters store spectra / profiles.
 # visibility: public (guests) | restricted (experts/admins)
 # ---------------------------------------------------------------------------
 parameters:
@@ -84,6 +122,15 @@ parameters:
   - {code: NESR_B3, name: "NESR Band 3", unit: "nW/(cm²·sr·cm⁻¹)", group: Radiometric, visibility: public,
      description: "Noise-equivalent spectral radiance, median over band 3 (2000-2760 cm-1)",
      limits: {warn_hi: 3.6, alarm_hi: 4.2, persistence: 2}}
+  - {code: NESR_IDX_MEAN, name: "NESR index (mean)", unit: "–", group: Radiometric, visibility: public,
+     description: "L1 NESR index (NESR / spectral template) averaged over all sub-bands and spectrograms of the orbit",
+     limits: {warn_hi: 1.10, alarm_hi: 1.25, persistence: 3}}
+  - {code: NESR_IDX, name: "NESR index per sub-band", unit: "–", group: Radiometric, visibility: restricted, dims: "sb,dir",
+     description: "L1 NESR index per spectral sub-band and FTS scan direction, averaged over the spectrograms of the orbit",
+     limits: {warn_hi: 1.12, alarm_hi: 1.27, persistence: 3}}
+  - {code: NESR_SPECTRAL, name: "Spectral NESR (orbit average)", unit: "nW/(cm²·sr·cm⁻¹)", group: Radiometric,
+     visibility: restricted, kind: vector, dims: "band",
+     description: "Spectrally resolved NESR averaged over all spectrograms of one orbit; compared with the spectral template"}
   - {code: GAIN_DRIFT_B1, name: "Radiometric gain drift B1", unit: "%", group: Radiometric, visibility: restricted,
      description: "Mean relative deviation of the on-board calibration gain from the reference (band 1)",
      limits: {warn_lo: -5.0, alarm_lo: -8.0, warn_hi: 3.0, alarm_hi: 5.0, persistence: 2}}
@@ -93,6 +140,9 @@ parameters:
   - {code: GAIN_DRIFT_B3, name: "Radiometric gain drift B3", unit: "%", group: Radiometric, visibility: restricted,
      description: "Mean relative deviation of the on-board calibration gain from the reference (band 3)",
      limits: {warn_lo: -3.0, alarm_lo: -5.0, warn_hi: 3.0, alarm_hi: 5.0, persistence: 2}}
+  - {code: TRANSMISSION, name: "Optical transmission", unit: "%", group: Radiometric, visibility: public, dims: "band",
+     description: "Optical transmission per band estimated from the on-board calibration gain relative to beginning of life",
+     limits: {warn_lo: 97.5, alarm_lo: 96.0, persistence: 3}}
   - {code: ICE_LOSS, name: "Ice contamination transmission loss", unit: "%", group: Radiometric, visibility: public,
      description: "Peak transmission loss at 830 cm-1 retrieved from the spectral shape of the band-1 gain (ice on cold optics)",
      limits: {warn_hi: 6.0, alarm_hi: 8.0, persistence: 3}}
@@ -103,19 +153,44 @@ parameters:
   - {code: LASER_DRIFT, name: "Metrology laser wavelength drift", unit: "ppm", group: Spectral, visibility: restricted,
      description: "Deviation of the reference laser wavelength from nominal (1550 nm)",
      limits: {warn_lo: -2.0, warn_hi: 2.0, alarm_lo: -3.0, alarm_hi: 3.0, persistence: 2}}
+  - {code: SSD, name: "Spectral sampling distance", unit: "cm⁻¹", group: Spectral, visibility: public,
+     description: "Spectral sampling distance 1/(2·OPDmax) from the metrology; statistics against the requirement",
+     requirement: {lo: 0.6249984375, hi: 0.6250015625, text: "SSD = 0.625 cm⁻¹ ± 2.5 ppm",
+                   reference: "FTS-SRD-PER-040 (assumed)"}}
+  - {code: SSD_COMPLIANCE, name: "SSD requirement compliance", unit: "%", group: Spectral, visibility: public,
+     algorithm: SSD_COMPLIANCE,
+     description: "Daily fraction of products whose spectral sampling distance meets the requirement",
+     limits: {warn_lo: 99.0, alarm_lo: 90.0, persistence: 1}}
   - {code: ILS_FWHM, name: "ILS width (FWHM)", unit: "cm⁻¹", group: Spectral, visibility: restricted,
      description: "Full width at half maximum of the instrument line shape from the reference line",
      limits: {warn_hi: 0.30, alarm_hi: 0.32, persistence: 3}}
+  - {code: ISRF_FEATURE, name: "Radiometric feature (ISRF impact)", unit: "%", group: Spectral, visibility: restricted,
+     description: "Largest radiometric feature outside the reference-line core in the calibration window (distorts the ISRF)",
+     limits: {warn_hi: 0.6, alarm_hi: 1.5, persistence: 2}}
   # --- Interferometric ----------------------------------------------------
   - {code: ZPD_OFFSET, name: "ZPD position offset", unit: "samples", group: Interferometric, visibility: restricted,
-     description: "Mean offset of the zero-path-difference position from the nominal sample",
+     description: "Mean offset of the zero-path-difference position determined during L1 processing from the nominal sample",
      limits: {warn_lo: -3.0, warn_hi: 3.0, alarm_lo: -5.0, alarm_hi: 5.0, persistence: 2}}
+  - {code: ANC_TA_OFFSET, name: "Turn-around position offset (ancillary)", unit: "samples", group: Interferometric,
+     visibility: restricted, description: "Mean corner-cube turn-around position from the ancillary data relative to nominal"}
+  - {code: ANC_FRINGE_DEV, name: "Fringe counter deviation", unit: "counts", group: Interferometric, visibility: restricted,
+     description: "Mean on-board fringe counter per scan relative to nominal (ancillary data)"}
+  - {code: ZPD_L1_ANC_DIFF, name: "ZPD: L1 vs. ancillary", unit: "samples", group: Interferometric, visibility: restricted,
+     algorithm: ZPD_L1_ANC_DIFF,
+     description: "Difference between the ZPD offset from L1 processing and the turn-around-derived offset (same orbit)",
+     limits: {warn_lo: -1.5, warn_hi: 1.5, alarm_lo: -2.5, alarm_hi: 2.5, persistence: 3}}
+  - {code: ZPD_FRINGE_CORR, name: "ZPD / fringe counter correlation", unit: "–", group: Interferometric,
+     visibility: restricted, algorithm: ZPD_FRINGE_CORR,
+     description: "Correlation of the L1 ZPD offset with the on-board fringe counter over the last 7 days (daily)"}
   - {code: IFG_PEAK_AMP, name: "Interferogram peak amplitude", unit: "DN", group: Interferometric, visibility: restricted,
      description: "Mean interferogram centre-burst amplitude (throughput indicator)",
      limits: {warn_lo: 27000.0, alarm_lo: 25000.0, persistence: 2}}
   - {code: SCAN_SPEED_STAB, name: "Scan speed stability", unit: "%", group: Interferometric, visibility: restricted,
      description: "Relative standard deviation of the corner-cube scan speed (micro-vibration indicator)",
      limits: {warn_hi: 0.8, alarm_hi: 1.2, persistence: 1}}
+  - {code: REF_SCI_DELAY, name: "Reference / science signal delay", unit: "µs", group: Interferometric, visibility: restricted,
+     description: "Delay between the metrology reference signal and the science signal chain",
+     limits: {warn_lo: 1.9, warn_hi: 2.1, alarm_lo: 1.8, alarm_hi: 2.3, persistence: 3}}
   # --- Thermal ------------------------------------------------------------
   - {code: T_DETECTOR, name: "Detector temperature", unit: "K", group: Thermal, visibility: public,
      description: "Mean focal-plane detector temperature (cryocooler performance)",
@@ -126,14 +201,45 @@ parameters:
   - {code: T_BLACKBODY, name: "On-board blackbody temperature", unit: "K", group: Thermal, visibility: public,
      description: "Mean on-board calibration blackbody temperature",
      limits: {warn_lo: 289.5, warn_hi: 290.5, alarm_lo: 289.0, alarm_hi: 291.0, persistence: 2}}
+  - {code: T_BENCH, name: "Optical bench temperature", unit: "K", group: Thermal, visibility: public, dims: "sensor",
+     description: "Mean optical bench temperature measured by two sensor types (PRT, thermistor)",
+     limits: {warn_lo: 294.4, warn_hi: 295.6, alarm_lo: 294.0, alarm_hi: 296.0, persistence: 2}}
+  - {code: T_BENCH_STAB, name: "Optical bench temperature stability", unit: "mK", group: Thermal, visibility: restricted,
+     dims: "sensor", description: "Standard deviation of the bench temperature within the orbit, per sensor type",
+     limits: {warn_hi: 50.0, alarm_hi: 120.0, persistence: 3}}
+  - {code: T_SENSOR_DIFF, name: "Bench sensors: PRT − thermistor", unit: "K", group: Thermal, visibility: restricted,
+     description: "Mean difference between the two bench sensor types",
+     limits: {warn_lo: -0.12, warn_hi: 0.12, alarm_lo: -0.25, alarm_hi: 0.25, persistence: 3}}
+  - {code: T_SENSOR_CORR, name: "Bench sensors: correlation", unit: "–", group: Thermal, visibility: restricted,
+     description: "Correlation of the in-orbit temperature variations seen by the two bench sensor types",
+     limits: {warn_lo: 0.6, alarm_lo: 0.4, persistence: 3}}
   # --- Data quality -------------------------------------------------------
   - {code: VALID_RATIO, name: "Valid spectra ratio", unit: "%", group: Data quality, visibility: public,
      description: "Fraction of earth-view spectra with a nominal quality flag",
      limits: {warn_lo: 97.0, alarm_lo: 95.0, persistence: 2}}
+  - {code: QF_FRACTION, name: "Quality flags", unit: "%", group: Data quality, visibility: restricted, dims: "flag",
+     description: "Fraction of earth-view spectra per quality flag (1 saturation, 2 spike, 3 calibration)",
+     limits: {warn_hi: 2.0, alarm_hi: 4.0, persistence: 2}}
   - {code: MISSING_SCANS, name: "Missing scans", unit: "count", group: Data quality, visibility: restricted,
      description: "Number of missing earth-view scans w.r.t. the nominal scan plan",
      limits: {warn_hi: 2.5, alarm_hi: 4.5, persistence: 1}}
+  # --- Catalogue (L0 / L1) --------------------------------------------------
+  - {code: L0_EO_SCANS, name: "L0 earth-view scans", unit: "count", group: Catalogue, visibility: public,
+     description: "Number of earth-view scans per L0 product (header information)",
+     limits: {warn_lo: 27.5, alarm_lo: 25.5, persistence: 1}}
+  - {code: L0_CAL_VIEWS, name: "L0 calibration views", unit: "count", group: Catalogue, visibility: restricted, dims: "view",
+     description: "Number of black-body (BB) and deep-space (DS) views per L0 product (header information)",
+     limits: {warn_lo: 9.5, alarm_lo: 8.5, persistence: 2}}
+  - {code: L0_PACKET_ERRORS, name: "L0 packet errors", unit: "count", group: Catalogue, visibility: restricted, dims: "view",
+     description: "Packet errors per L0 product and view type (header information)",
+     limits: {warn_hi: 2.5, alarm_hi: 6.0, persistence: 1}}
+  - {code: L1_COMPLETENESS, name: "L0 → L1 processing completeness", unit: "%", group: Catalogue, visibility: public,
+     algorithm: L1_COMPLETENESS,
+     description: "Daily fraction of L0 earth-view orbits processed to L1 (per baseline)",
+     limits: {warn_lo: 98.0, alarm_lo: 90.0, persistence: 1}}
   # --- Geometric ----------------------------------------------------------
   - {code: COREG_OFFSET, name: "Co-registration offset", unit: "km", group: Geometric, visibility: public,
      description: "Mean co-registration offset of the FTS footprints w.r.t. the reference imager",
      limits: {warn_hi: 0.5, alarm_hi: 0.75, persistence: 3}}
+  - {code: GEO_TRACK, name: "Ground track (lat / lon)", unit: "°", group: Geometric, visibility: public, kind: vector,
+     description: "Latitude / longitude of the spectrogram footprints of each orbit"}

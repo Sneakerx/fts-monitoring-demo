@@ -1,13 +1,16 @@
 {% extends "base.html" %}
 {% block title %}Explorer{% endblock %}
 {% block content %}
-<h1>Parameter explorer <span class="sub">correlate parameters on a shared time axis (zoom/pan synchronised)</span></h1>
+<h1>Parameter explorer <span class="sub">correlate parameters on a shared time axis (zoom/pan synchronised); compare processing baselines</span></h1>
 <div class="grid g-side">
   <div class="panel">
     <div class="toolbar">
       <div class="seg" id="ranges">
         {% for r in ['1d', '7d', '30d', '90d', 'all'] %}<button data-r="{{ r }}" class="{{ 'on' if r == 'all' }}">{{ r }}</button>{% endfor %}
       </div>
+      {% if baselines|length > 1 %}
+      <label class="sub">baseline <select id="baseline">{% for b in baselines %}<option value="{{ b }}">{{ b }}{{ ' (nominal)' if loop.first }}</option>{% endfor %}</select></label>
+      {% endif %}
       <span class="sub" id="shown"></span>
     </div>
     <div id="chart" class="chart" style="height:640px"></div>
@@ -18,16 +21,19 @@
       {% for g, ps in groups %}
       <p style="margin:10px 0 4px;font-weight:600">{{ g }}</p>
       {% for p in ps %}
-      <label style="display:block;padding:2px 0"><input type="checkbox" name="c" value="{{ p.code }}" {{ 'checked' if p.code in selected }}> {{ p.name }}</label>
+      <label style="display:block;padding:2px 0"><input type="checkbox" name="c" value="{{ p.code }}" {{ 'checked' if p.code in selected }}> {{ p.name }}{% if p.dims %} <span class="sub">({{ p.dims }})</span>{% endif %}</label>
       {% endfor %}{% endfor %}
     </form>
-    <p class="sub" style="margin-top:14px">Tip (demo): compare <i>Metrology laser wavelength drift</i> with <i>Spectral calibration shift</i>, or <i>Detector temperature</i> with <i>NESR</i>.</p>
+    <p class="sub" style="margin-top:14px">Tips (demo): <i>Metrology laser wavelength drift</i> + <i>Spectral calibration shift</i> + <i>SSD</i>;
+      <i>ZPD position offset</i> + <i>Turn-around position offset</i> + <i>Fringe counter deviation</i>;
+      <i>Bench temperature</i> + <i>Bench sensors: correlation</i>; <i>NESR index (mean)</i> + <i>Detector temperature</i>.</p>
   </div>
 </div>
 {% endblock %}
 {% block scripts %}
 <script>
 let range = "all";
+const blSel = document.getElementById("baseline");
 async function load() {
   const codes = [...document.querySelectorAll("#sel input:checked")].map(x => x.value).slice(0, 8);
   history.replaceState(null, "", "/explorer?codes=" + codes.join(","));
@@ -35,7 +41,8 @@ async function load() {
   chart.style.height = Math.max(320, 170 * codes.length + 60) + "px";
   if (!codes.length) { Plotly.purge(chart); chart.innerHTML = '<p class="muted">Select parameters.</p>'; return; }
   chart.innerHTML = "";
-  const d = await IMF.json(`/api/series?codes=${codes.join(",")}&range=${range}`);
+  const bl = blSel ? "&baseline=" + encodeURIComponent(blSel.value) : "";
+  const d = await IMF.json(`/api/series?codes=${codes.join(",")}&range=${range}${bl}`);
   if (d) IMF.plot(chart, d);
 }
 document.querySelectorAll("#sel input").forEach(i => i.onchange = load);
@@ -43,6 +50,7 @@ document.querySelectorAll("#ranges button").forEach(b => b.onclick = () => {
   document.querySelectorAll("#ranges button").forEach(x => x.classList.remove("on"));
   b.classList.add("on"); range = b.dataset.r; load();
 });
+if (blSel) blSel.onchange = load;
 load();
 </script>
 {% endblock %}

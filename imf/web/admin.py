@@ -1,16 +1,21 @@
-"""Administration: users, limits, parameter visibility, jobs, audit log, system health."""
+"""Administration: users, limits, requirements, parameter visibility, jobs, reprocessing campaigns,
+MDB management (import, manual parameters, purge, export, backup, check, repair), API tokens, audit log."""
 from __future__ import annotations
 
+import json
 import threading
 
 import httpx
-from fastapi import APIRouter, Depends, Form, HTTPException, Request
-from fastapi.responses import RedirectResponse
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
+from fastapi.responses import FileResponse, RedirectResponse
 from sqlalchemy import func, select
 from sqlalchemy.orm import selectinload
 
-from ..models import AuditLog, Limit, Parameter, PollRun, Product, Report, Sample, User
+from .. import mdb
+from ..models import (ApiToken, AuditLog, Campaign, Limit, Parameter, PollRun, Product, Report, Requirement, Sample,
+                      VectorSample, User)
 from ..security import ROLE_RANK, hash_password
+from ..timeutil import parse_iso
 from .auth import CurrentUser, require_admin
 from .common import audit, flash, render, services
 
@@ -22,20 +27,31 @@ def _opt_float(v: str) -> float | None:
     return float(v) if v else None
 
 
+def _opt_time(v: str):
+    v = v.strip()
+    return parse_iso(v) if v else None
+
+
 @router.get("")
 def admin_home(request: Request, user: CurrentUser = Depends(require_admin)):
     svc = services(request)
     with svc.db.session() as s:
         users = list(s.scalars(select(User).order_by(User.username)))
-        params = list(s.scalars(select(Parameter).options(selectinload(Parameter.limits))
+        params = list(s.scalars(select(Parameter).options(selectinload(Parameter.limits),
+                                                          selectinload(Parameter.requirements))
                                 .order_by(Parameter.sort_order)))
         audit_rows = list(s.scalars(select(AuditLog).order_by(AuditLog.id.desc()).limit(60)))
         polls = list(s.scalars(select(PollRun).order_by(PollRun.id.desc()).limit(10)))
+        campaigns = list(s.scalars(select(Campaign).order_by(Campaign.id.desc())))
+        tokens = list(s.scalars(select(ApiToken).order_by(ApiToken.name)))
         db_stats = {
             "products": s.scalar(select(func.count(Product.id))),
             "samples": s.scalar(select(func.count(Sample.id))),
+            "vectors": s.scalar(select(func.count(VectorSample.id))),
             "reports": s.scalar(select(func.count(Report.id))),
         }
+        product_types = sorted({t for (t,) in s.execute(select(Product.product_type).distinct())})
+        baselines = sorted({b for (b,) in s.execute(select(Product.baseline).distinct()) if b})
     pdgs_status = None
     try:
         base = svc.settings.pdgs.base_url.rsplit("/odata", 1)[0]
@@ -44,11 +60,19 @@ def admin_home(request: Request, user: CurrentUser = Depends(require_admin)):
         pass
     jobs = [{"id": j.id, "name": j.name, "next": j.next_run_time} for j in svc.scheduler.get_jobs()] \
         if svc.scheduler.running else []
+    check_result = request.session.pop("mdb_check", None)
+    purge_preview = request.session.pop("purge_preview", None)
+    new_token = request.session.pop("new_token", None)
     return render(request, "admin.html", user, users=users, params=params, audit_rows=audit_rows, polls=polls,
                   db_stats=db_stats, jobs=jobs, pdgs_status=pdgs_status, roles=list(ROLE_RANK),
-                  settings=svc.settings, poll_busy=svc.poller.busy)
+                  settings=svc.settings, poll_busy=svc.poller.busy, campaigns=campaigns, tokens=tokens,
+                  backups=mdb.list_backups(svc.settings.processing.backup_dir), check_result=check_result,
+                  purge_preview=purge_preview, new_token=new_token, product_types=product_types,
+                  baselines=baselines, rules=svc.rules.rules, rule_cfg=svc.rules.config,
+                  running={c.id: svc.campaigns.is_running(c.id) for c in campaigns})
 
 
+# ---------------------------------------------------------------- users
 @router.post("/users")
 def create_user(request: Request, username: str = Form(...), full_name: str = Form(""), password: str = Form(...),
                 role: str = Form(...), user: CurrentUser = Depends(require_admin)):
@@ -93,6 +117,7 @@ def update_user(request: Request, uid: int, role: str = Form(...), active: bool 
     return RedirectResponse("/admin#users", status_code=303)
 
 
+# ---------------------------------------------------------------- limits, requirements, visibility
 @router.post("/limits/{code}")
 def update_limits(request: Request, code: str, warn_lo: str = Form(""), warn_hi: str = Form(""),
                   alarm_lo: str = Form(""), alarm_hi: str = Form(""), persistence: int = Form(1),
@@ -127,6 +152,26 @@ def update_limits(request: Request, code: str, warn_lo: str = Form(""), warn_hi:
     return RedirectResponse(next, status_code=303)
 
 
+@router.post("/requirements/{code}")
+def update_requirement(request: Request, code: str, lo: str = Form(""), hi: str = Form(""), text: str = Form(""),
+                       reference: str = Form(""), next: str = Form("/admin#limits"),
+                       user: CurrentUser = Depends(require_admin)):
+    try:
+        lo_v, hi_v = _opt_float(lo), _opt_float(hi)
+    except ValueError:
+        flash(request, "Requirement bounds must be numbers", "error")
+        return RedirectResponse(next, status_code=303)
+    with services(request).db.session() as s:
+        p = s.scalar(select(Parameter).where(Parameter.code == code))
+        if p is None:
+            raise HTTPException(404)
+        s.add(Requirement(parameter_id=p.id, lo=lo_v, hi=hi_v, text=text.strip()[:200],
+                          reference=reference.strip()[:200], changed_by=user.username))
+        audit(s, user, "requirement.update", code, f"[{lo_v}, {hi_v}] {text} ({reference})")
+    flash(request, f"Requirement of {code} updated (new version)")
+    return RedirectResponse(next if next.startswith("/") and not next.startswith("//") else "/admin", status_code=303)
+
+
 @router.post("/visibility/{code}")
 def toggle_visibility(request: Request, code: str, user: CurrentUser = Depends(require_admin)):
     svc = services(request)
@@ -151,6 +196,7 @@ def toggle_publish(request: Request, rid: int, user: CurrentUser = Depends(requi
     return RedirectResponse("/reports", status_code=303)
 
 
+# ---------------------------------------------------------------- jobs
 @router.post("/jobs/{job}")
 def trigger_job(request: Request, job: str, user: CurrentUser = Depends(require_admin)):
     svc = services(request)
@@ -158,6 +204,9 @@ def trigger_job(request: Request, job: str, user: CurrentUser = Depends(require_
         threading.Thread(target=svc.poller.run_once, kwargs={"trigger": f"manual:{user.username}"},
                          daemon=True).start()
         msg = "Polling triggered"
+    elif job == "postprocess":
+        threading.Thread(target=svc.postprocess, daemon=True).start()
+        msg = "Analyses, trend rules and periodic reports triggered"
     elif job == "reports":
         threading.Thread(target=svc.reports.check_schedule, daemon=True).start()
         msg = "Periodic report check triggered"
@@ -167,3 +216,185 @@ def trigger_job(request: Request, job: str, user: CurrentUser = Depends(require_
         audit(s, user, "job.trigger", job)
     flash(request, msg)
     return RedirectResponse("/admin#system", status_code=303)
+
+
+# ---------------------------------------------------------------- reprocessing campaigns (R7)
+@router.post("/campaigns")
+def create_campaign(request: Request, name: str = Form(...), baseline: str = Form(...),
+                    product_type: str = Form("FTS_L1B"), start: str = Form(""), end: str = Form(""),
+                    run: bool = Form(False), user: CurrentUser = Depends(require_admin)):
+    svc = services(request)
+    try:
+        cid = svc.campaigns.create(name.strip(), baseline.strip(), product_type.strip(), _opt_time(start),
+                                   _opt_time(end), user.username)
+        if run:
+            svc.campaigns.start(cid, user.username)
+    except ValueError as exc:
+        flash(request, str(exc), "error")
+        return RedirectResponse("/admin#campaigns", status_code=303)
+    flash(request, f"Campaign {name} created" + (" and started" if run else ""))
+    return RedirectResponse("/admin#campaigns", status_code=303)
+
+
+@router.post("/campaigns/{cid}/{action}")
+def campaign_action(request: Request, cid: int, action: str, user: CurrentUser = Depends(require_admin)):
+    svc = services(request)
+    try:
+        if action == "start":
+            with svc.db.session() as s:
+                c = s.get(Campaign, cid)
+                if c and c.status in ("DONE", "CANCELLED", "FAILED"):
+                    c.status = "PLANNED"  # restart: continues from its own watermark
+            svc.campaigns.start(cid, user.username)
+            msg = "Campaign started (runs in parallel to the nominal processing)"
+        elif action == "cancel":
+            svc.campaigns.cancel(cid, user.username)
+            msg = "Campaign cancelled"
+        else:
+            raise HTTPException(404)
+    except ValueError as exc:
+        flash(request, str(exc), "error")
+        return RedirectResponse("/admin#campaigns", status_code=303)
+    flash(request, msg)
+    return RedirectResponse("/admin#campaigns", status_code=303)
+
+
+# ---------------------------------------------------------------- MDB management (R1, R4, R5, R11)
+@router.post("/mdb/parameters")
+def create_parameter(request: Request, code: str = Form(...), name: str = Form(...), unit: str = Form(""),
+                     group: str = Form("Manual"), description: str = Form(""), kind: str = Form("scalar"),
+                     dims: str = Form(""), visibility: str = Form("restricted"),
+                     user: CurrentUser = Depends(require_admin)):
+    with services(request).db.session() as s:
+        try:
+            p = mdb.create_parameter(s, code, name, unit=unit, group=group, description=description, kind=kind,
+                                     dims=dims, visibility=visibility)
+        except ValueError as exc:
+            flash(request, str(exc), "error")
+            return RedirectResponse("/admin#mdb", status_code=303)
+        audit(s, user, "parameter.create", p.code, f"manual parameter, kind={kind}, group={group}")
+    flash(request, f"Parameter {p.code} created - populate it by import, manual entry or the API")
+    return RedirectResponse("/admin#mdb", status_code=303)
+
+
+@router.post("/mdb/import")
+async def import_file(request: Request, what: str = Form(...), name: str = Form(""), unit: str = Form(""),
+                      file: UploadFile = File(...), user: CurrentUser = Depends(require_admin)):
+    svc = services(request)
+    data = await file.read()
+    try:
+        with svc.db.session() as s:
+            if what == "samples":
+                res = mdb.import_samples_csv(s, data, file.filename or "upload.csv", user.username)
+                svc.rules.on_limit_events(s, res.new_events)
+                msg = f"Samples: {res.summary()}"
+            elif what == "timeline":
+                res = mdb.import_timeline_csv(s, data, file.filename or "upload.csv", user.username)
+                msg = f"Timeline: {res.summary()}"
+            elif what == "reference":
+                if not name.strip():
+                    raise ValueError("a reference data name is required")
+                refs = mdb.import_reference_csv(s, data, name.strip().upper(), unit=unit, author=user.username,
+                                                filename=file.filename)
+                msg = f"Reference data {name.upper()}: {len(refs)} record(s), version {refs[0].version}"
+            else:
+                raise HTTPException(404)
+            audit(s, user, f"mdb.import.{what}", file.filename or "", msg[:500])
+    except (ValueError, UnicodeDecodeError) as exc:
+        flash(request, f"Import failed: {exc}", "error")
+        return RedirectResponse("/admin#mdb", status_code=303)
+    flash(request, msg, "error" if "error" in msg else "info")
+    return RedirectResponse("/admin#mdb", status_code=303)
+
+
+@router.post("/mdb/purge")
+def purge(request: Request, baseline: str = Form(""), product_type: str = Form(""), parameter: str = Form(""),
+          start: str = Form(""), end: str = Form(""), confirm: bool = Form(False), reset_watermarks: bool = Form(False),
+          user: CurrentUser = Depends(require_admin)):
+    svc = services(request)
+    try:
+        f = mdb.PurgeFilter(baseline=baseline.strip() or None, product_type=product_type.strip() or None,
+                            parameter=parameter.strip() or None, start=_opt_time(start), end=_opt_time(end))
+        with svc.db.session() as s:
+            counts = mdb.purge(s, f, dry_run=not confirm, reset_watermarks=reset_watermarks)
+            if confirm:
+                audit(s, user, "mdb.purge", f.describe(), json.dumps(counts))
+    except ValueError as exc:
+        flash(request, f"Purge: {exc}", "error")
+        return RedirectResponse("/admin#mdb", status_code=303)
+    if confirm:
+        flash(request, f"Purged ({f.describe()}): {counts}")
+    else:
+        request.session["purge_preview"] = {"filter": {"baseline": baseline, "product_type": product_type,
+                                                       "parameter": parameter, "start": start, "end": end,
+                                                       "reset_watermarks": reset_watermarks},
+                                            "describe": f.describe(), "counts": counts}
+    return RedirectResponse("/admin#mdb", status_code=303)
+
+
+@router.post("/mdb/backup")
+def backup(request: Request, user: CurrentUser = Depends(require_admin)):
+    svc = services(request)
+    path = mdb.backup(svc.db, svc.settings.processing.backup_dir)
+    with svc.db.session() as s:
+        audit(s, user, "mdb.backup", path.name)
+    flash(request, f"Backup {path.name} created (restore with: python -m imf.cli db restore {path.name})")
+    return RedirectResponse("/admin#mdb", status_code=303)
+
+
+@router.get("/mdb/backups/{name}")
+def download_backup(request: Request, name: str, user: CurrentUser = Depends(require_admin)):
+    base = services(request).settings.processing.backup_dir.resolve()
+    path = (base / name).resolve()
+    if path.parent != base or not path.exists():
+        raise HTTPException(404)
+    return FileResponse(path, filename=path.name)
+
+
+@router.post("/mdb/check")
+def check(request: Request, user: CurrentUser = Depends(require_admin)):
+    svc = services(request)
+    request.session["mdb_check"] = mdb.check(svc.db)
+    with svc.db.session() as s:
+        audit(s, user, "mdb.check", "", json.dumps(request.session["mdb_check"].get("problems")))
+    return RedirectResponse("/admin#mdb", status_code=303)
+
+
+@router.post("/mdb/repair")
+def repair(request: Request, user: CurrentUser = Depends(require_admin)):
+    svc = services(request)
+    if svc.poller.busy:
+        flash(request, "Repair is not possible while products are being ingested", "error")
+        return RedirectResponse("/admin#mdb", status_code=303)
+    result = mdb.repair(svc.db)
+    with svc.db.session() as s:
+        audit(s, user, "mdb.repair", "", json.dumps(result))
+    flash(request, f"Repair finished: {result}")
+    return RedirectResponse("/admin#mdb", status_code=303)
+
+
+# ---------------------------------------------------------------- API tokens (R8)
+@router.post("/tokens")
+def create_token(request: Request, name: str = Form(...), role: str = Form("expert"),
+                 user: CurrentUser = Depends(require_admin)):
+    with services(request).db.session() as s:
+        try:
+            token = mdb.create_token(s, name.strip(), role, user.username)
+        except ValueError as exc:
+            flash(request, str(exc), "error")
+            return RedirectResponse("/admin#tokens", status_code=303)
+        audit(s, user, "token.create", name, f"role={role}")
+    request.session["new_token"] = {"name": name.strip(), "token": token}
+    return RedirectResponse("/admin#tokens", status_code=303)
+
+
+@router.post("/tokens/{tid}/revoke")
+def revoke_token(request: Request, tid: int, user: CurrentUser = Depends(require_admin)):
+    with services(request).db.session() as s:
+        t = s.get(ApiToken, tid)
+        if t is None:
+            raise HTTPException(404)
+        t.active = False
+        audit(s, user, "token.revoke", t.name)
+    flash(request, "Token revoked")
+    return RedirectResponse("/admin#tokens", status_code=303)

@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+{% block title %}Ground track{% endblock %}
+{% block content %}
+<h1>Geometry <span class="sub">latitude / longitude of the spectrogram footprints (GEO_TRACK), latest orbits</span></h1>
+<div class="panel">
+  <div class="toolbar">
+    <div class="seg" id="ranges">
+      {% for r in ['1d', '7d', '30d'] %}<button data-r="{{ r }}" class="{{ 'on' if r == '1d' }}">{{ r }}</button>{% endfor %}
+    </div>
+    <span class="sub" id="info"></span>
+  </div>
+  <div id="chart" class="chart" style="height:620px"></div>
+  <p class="sub">Equirectangular frame (no base map, works offline). Up to 60 orbits are shown. Co-registration quality: see parameter <a href="/parameters/COREG_OFFSET">Co-registration offset</a>.</p>
+</div>
+{% endblock %}
+{% block scripts %}
+<script>
+let range = "1d";
+async function load() {
+  const d = await IMF.json(`/api/geo?range=${range}`);
+  if (!d) return;
+  IMF.plotTracks(document.getElementById("chart"), d);
+  document.getElementById("info").textContent = d.tracks.length ? `${d.tracks.length} orbits · ${d.start.slice(0, 16)} – ${d.end.slice(0, 16)} UTC` : "";
+}
+document.querySelectorAll("#ranges button").forEach(b => b.onclick = () => {
+  document.querySelectorAll("#ranges button").forEach(x => x.classList.remove("on"));
+  b.classList.add("on"); range = b.dataset.r; load();
+});
+load();
+</script>
+{% endblock %}

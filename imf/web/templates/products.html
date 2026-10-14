@@ -1,35 +1,47 @@
 {% extends "base.html" %}
 {% block title %}Products{% endblock %}
 {% block content %}
-<h1>Ingested Level-1 products</h1>
+<h1>Ingested products <span class="sub">L0 (header information), auxiliary and L1 products per processing baseline; only checksums of downloaded products are kept</span></h1>
 <div class="kpis">
   <div class="kpi"><div class="v">{{ stats.get('PROCESSED', 0) }}</div><div class="l">Processed</div></div>
   <div class="kpi status-{{ 'ALARM' if stats.get('FAILED') else 'NOMINAL' }}"><div class="v">{{ stats.get('FAILED', 0) }}</div><div class="l">Failed (e.g. corrupted)</div></div>
-  <div class="kpi"><div class="v">{{ '%.0f'|format(avg_ms or 0) }} ms</div><div class="l">Mean download + processing time</div></div>
+  <div class="kpi"><div class="v">{{ '%.0f'|format(avg_ms or 0) }} ms</div><div class="l">Mean L1 download + processing time</div></div>
+</div>
+<div class="panel" style="margin-bottom:16px">
+  <h2>Catalogue by type and baseline</h2>
+  <div class="table-wrap"><table>
+    <tr><th>Level</th><th>Product type</th><th>Baseline</th><th class="n">Products</th><th></th></tr>
+    {% for t, lvl, bl, n in by_type %}
+    <tr><td>{{ lvl }}</td><td class="mono">{{ t }}</td><td>{{ bl or '–' }}</td><td class="n">{{ n }}</td>
+        <td><a class="sub" href="/products?type={{ t }}&baseline={{ bl }}">show</a></td></tr>
+    {% endfor %}
+  </table></div>
 </div>
 <div class="panel">
   <div class="toolbar">
     <div class="seg">
-      <a href="/products" class="{{ 'on' if not status }}">all</a>
-      <a href="/products?status=PROCESSED" class="{{ 'on' if status == 'PROCESSED' }}">processed</a>
-      <a href="/products?status=FAILED" class="{{ 'on' if status == 'FAILED' }}">failed</a>
+      <a href="/products?type={{ type }}&baseline={{ baseline }}" class="{{ 'on' if not status }}">all</a>
+      <a href="/products?status=PROCESSED&type={{ type }}&baseline={{ baseline }}" class="{{ 'on' if status == 'PROCESSED' }}">processed</a>
+      <a href="/products?status=FAILED&type={{ type }}&baseline={{ baseline }}" class="{{ 'on' if status == 'FAILED' }}">failed</a>
     </div>
+    {% if type or baseline %}<span class="tag">{{ type or 'all types' }} · {{ baseline or 'all baselines' }}</span> <a class="sub" href="/products?status={{ status }}">clear filter</a>{% endif %}
     <span class="sub">{{ total }} products</span>
   </div>
   <div class="table-wrap"><table>
-    <tr><th>Status</th><th>Product</th><th class="n">Orbit</th><th>Sensing start</th><th>Sensing stop</th><th>Published (PDGS)</th><th>Ingested (IMF)</th><th class="n">Proc. [ms]</th><th>Remark</th></tr>
+    <tr><th>Status</th><th>Product</th><th>Type</th><th>Baseline</th><th class="n">Orbit</th><th>Sensing start</th><th>Published (PDGS)</th><th>Ingested (IMF)</th><th class="n">Proc. [ms]</th><th>Remark</th></tr>
     {% for p in products %}
     <tr><td><span class="st {{ p.status }}">{{ p.status }}</span></td>
-        <td class="mono"><a href="/products/{{ p.id }}">{{ p.name }}</a></td><td class="n">{{ p.orbit }}</td>
-        <td>{{ p.sensing_start|fmt }}</td><td>{{ p.sensing_stop|fmt }}</td><td>{{ p.publication_date|fmt }}</td>
+        <td class="mono"><a href="/products/{{ p.id }}">{{ p.name }}</a></td><td class="sub">{{ p.product_type }}</td><td>{{ p.baseline or '–' }}</td><td class="n">{{ p.orbit or '' }}</td>
+        <td>{{ p.sensing_start|fmt }}</td><td>{{ p.publication_date|fmt }}</td>
         <td>{{ p.ingested_at|fmts }}</td><td class="n">{{ '%.0f'|format(p.processing_ms or 0) }}</td>
         <td class="sub">{{ (p.error or '')[:80] }}</td></tr>
     {% endfor %}
   </table></div>
   <div class="pager">
-    {% if page > 1 %}<a class="btn secondary small" href="?status={{ status }}&page={{ page - 1 }}">← newer</a>{% endif %}
+    {% set qs = 'status=' ~ status ~ '&type=' ~ type ~ '&baseline=' ~ baseline %}
+    {% if page > 1 %}<a class="btn secondary small" href="?{{ qs }}&page={{ page - 1 }}">← newer</a>{% endif %}
     <span class="sub">page {{ page }} / {{ ((total - 1) // per_page) + 1 }}</span>
-    {% if page * per_page < total %}<a class="btn secondary small" href="?status={{ status }}&page={{ page + 1 }}">older →</a>{% endif %}
+    {% if page * per_page < total %}<a class="btn secondary small" href="?{{ qs }}&page={{ page + 1 }}">older →</a>{% endif %}
   </div>
 </div>
 {% endblock %}

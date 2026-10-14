@@ -8,6 +8,7 @@
   <div class="kpi"><div class="v" id="v-latest">…</div><div class="l">Latest sensing time (UTC)</div></div>
   <div class="kpi"><div class="v" id="v-products">…</div><div class="l">Products processed / failed</div></div>
   <div class="kpi"><div class="v" id="v-events">…</div><div class="l">Active alarms / warnings</div></div>
+  {% if user.is_expert %}<div class="kpi"><div class="v"><a id="v-actions" href="/events?category=action">…</a></div><div class="l">Proposed outputs awaiting approval</div></div>{% endif %}
   <div class="kpi"><div class="v" id="v-poll" style="font-size:16px">…</div><div class="l">Last PDGS poll (UTC)</div></div>
 </div>
 
@@ -22,7 +23,7 @@
         {% for p in ps %}
         {% set lv = p.state.level if p.state else 0 %}
         <li><a href="/parameters/{{ p.code }}"><span class="dot l{{ lv }}"></span>{{ p.name }}</a>
-            <span class="val" data-code="{{ p.code }}">{{ p.state.last_value|num if p.state else '–' }}</span></li>
+            {% if p.kind == 'scalar' %}<span class="val" data-code="{{ p.code }}">{{ p.state.last_value|num if p.state else '–' }}</span>{% else %}<span class="val">spectrum</span>{% endif %}</li>
         {% endfor %}
       </ul>
     </div>
@@ -37,7 +38,7 @@
   </div>
   <div class="grid" style="align-content:start">
     <div class="panel">
-      <h2>Data ingestion <span class="sub">products per day (last 30 days) vs. expected</span></h2>
+      <h2>Data ingestion <span class="sub">L1 products per day (last 30 days) vs. expected; line: L0 earth-view products</span></h2>
       <div id="ingest-chart" class="chart mid"></div>
     </div>
     {% if user.is_expert %}
@@ -47,11 +48,19 @@
         <tr><th>Severity</th><th>Parameter</th><th>Onset</th><th>Value</th><th>Status</th></tr>
         {% for e in recent_events %}
         <tr><td><span class="st {{ e.severity }}">{{ e.severity }}</span></td>
-            <td><a href="/parameters/{{ e.parameter.code }}">{{ e.parameter.name }}</a></td>
-            <td>{{ e.time|fmt }}</td><td class="n">{{ e.value|num }} {{ e.parameter.unit }}</td>
+            <td><a href="/events/{{ e.id }}">{{ e.label }}</a>{% if e.category == 'action' %} <span class="tag">action</span>{% endif %}</td>
+            <td>{{ e.time|fmt }}</td><td class="n">{{ e.value|num }} {{ e.parameter.unit if e.parameter and e.limit_text else '' }}</td>
             <td><span class="st {{ e.status }}">{{ e.status }}</span>{% if e.cleared_at %} <span class="tag">cleared</span>{% endif %}</td></tr>
         {% else %}<tr><td colspan="5" class="muted">No events</td></tr>{% endfor %}
       </table></div>
+    </div>
+    <div class="panel">
+      <h2>Mission timeline <a class="sub" href="/timeline">full timeline →</a></h2>
+      <table>
+        {% for t in timeline %}
+        <tr><td><span class="tag">{{ t.type }}</span></td><td>{{ t.start|fmt }}</td><td class="sub">{{ t.title }}</td></tr>
+        {% else %}<tr><td class="muted">No timeline entries yet.</td></tr>{% endfor %}
+      </table>
     </div>
     {% endif %}
     <div class="panel">
@@ -82,6 +91,7 @@ async function loadCharts() {
     Plotly.react("ingest-chart", [
       { x: ing.days, y: ing.processed, type: "bar", name: "processed", marker: { color: IMF.C.series } },
       { x: ing.days, y: ing.failed, type: "bar", name: "failed", marker: { color: IMF.C.alarm } },
+      { x: ing.days, y: ing.l0, type: "scatter", mode: "lines", name: "L0 earth views", line: { color: "#2a9d8f", width: 1.5 } },
     ], { barmode: "stack", margin: { l: 40, r: 10, t: 6, b: 30 }, font: { size: 11 }, paper_bgcolor: "rgba(0,0,0,0)",
          plot_bgcolor: "#fff", legend: { orientation: "h", y: 1.15 }, yaxis: { gridcolor: IMF.C.grid },
          shapes: [{ type: "line", xref: "paper", x0: 0, x1: 1, y0: ing.expected, y1: ing.expected,
@@ -95,6 +105,8 @@ function updateKpis(st) {
   document.getElementById("v-latest").textContent = st.latest_sensing ? st.latest_sensing.slice(0, 16).replace("T", " ") : "–";
   document.getElementById("v-products").textContent = st.products_processed + " / " + st.products_failed;
   document.getElementById("v-events").innerHTML = `<span style="color:var(--alarm)">${st.open_alarms}</span> / <span style="color:var(--warn)">${st.open_warnings}</span>`;
+  const act = document.getElementById("v-actions");
+  if (act && st.proposals_pending !== null) act.textContent = st.proposals_pending;
   document.getElementById("v-poll").textContent = (st.last_poll ? st.last_poll.slice(0, 19).replace("T", " ") : "–") + (st.last_poll_error ? " ⚠" : "");
   for (const [code, p] of Object.entries(st.parameters)) {
     const el = document.querySelector(`.val[data-code="${code}"]`);

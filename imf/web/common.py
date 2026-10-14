@@ -1,6 +1,7 @@
 """Shared helpers for the web layer."""
 from __future__ import annotations
 
+import json
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -9,7 +10,7 @@ from fastapi.templating import Jinja2Templates
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from ..models import AuditLog, Parameter, Sample
+from ..models import INDEPENDENT, AuditLog, Parameter, Product, Sample
 from ..reporting.report import _num
 from ..services import Services
 from ..timeutil import fmt, iso, parse_iso
@@ -23,6 +24,7 @@ TEMPLATES.env.filters["iso"] = iso
 
 LEVEL_CLASS = {0: "NOMINAL", 1: "WARNING", 2: "ALARM"}
 TEMPLATES.env.globals["LEVEL_CLASS"] = LEVEL_CLASS
+TEMPLATES.env.filters["fromjson"] = lambda s: json.loads(s) if s else {}
 
 RANGES = {"1d": timedelta(days=1), "7d": timedelta(days=7), "14d": timedelta(days=14), "30d": timedelta(days=30),
           "90d": timedelta(days=90), "all": None}
@@ -48,11 +50,24 @@ def audit(s: Session, user: CurrentUser | str, action: str, target: str = "", de
     s.add(AuditLog(username=name, action=action, target=target, details=details))
 
 
-def visible_params_query(user: CurrentUser):
+def visible_params_query(user: CurrentUser, kind: str | None = None):
     q = select(Parameter).order_by(Parameter.sort_order)
     if not user.is_expert:
         q = q.where(Parameter.visibility == "public")
+    if kind:
+        q = q.where(Parameter.kind == kind)
     return q
+
+
+def baselines(s: Session, nominal: str) -> list[str]:
+    """Processing baselines present in the MDB, nominal first."""
+    found = [b for (b,) in s.execute(select(Product.baseline).where(Product.baseline != INDEPENDENT).distinct())]
+    return [nominal] + sorted(b for b in found if b != nominal)
+
+
+def baseline_filter(col, baseline: str):
+    """Baseline view: the baseline's own data plus baseline-independent data (L0, AUX, manual)."""
+    return col.in_([baseline, INDEPENDENT])
 
 
 def can_see(user: CurrentUser, p: Parameter | None) -> bool:

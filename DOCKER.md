@@ -56,8 +56,9 @@ docker run ... fts-monitoring-demo:local --days 10 --orbit-every 15
 ## First start
 
 * The simulator creates a mission history of `--days` days (default 90). The IMF then ingests this
-  backlog in the background, which takes about 1–2 minutes. After that, a new orbit product arrives
-  every 30 seconds.
+  backlog (L0 headers, ancillary and L1 products) in the background, which takes about 2–3 minutes.
+  After that, a new orbit arrives every 30 seconds.
+* The database schema is created or migrated automatically at start-up.
 * Daily and weekly reports are generated once their period is complete. They appear under
   *Reports*.
 * `docker ps` shows the container as `healthy` once both the portal and the simulator respond. This
@@ -77,6 +78,19 @@ mount point. Remove the volume instead:
 ```sh
 docker rm -f imf && docker volume rm imf-data
 ```
+
+**Operations CLI.** Backups, checks, exports and campaigns can be run inside the running container.
+Files are written into the volume:
+
+```sh
+docker exec imf python -m imf.cli db backup          # -> /app/data/backups
+docker exec imf python -m imf.cli db check
+docker exec imf python -m imf.cli db export --out /app/data/exports/mdb.zip
+```
+
+`db restore` replaces the database. Stop the portal first, then run the restore in a one-off
+container on the same volume:
+`docker run --rm -v imf-data:/app/data --entrypoint python fts-monitoring-demo:local -m imf.cli db restore /app/data/backups/<file> --yes`.
 
 **Volume type.** Use a named volume, not a bind mount to a Windows folder. SQLite in WAL mode can
 run into file-locking problems on bind mounts under Docker Desktop.

@@ -2,25 +2,25 @@
 {% block title %}Parameters{% endblock %}
 {% block content %}
 <h1>Monitoring parameters</h1>
-<p class="sub">Derived from every Level-1 product by plug-in algorithms. {% if not user.is_expert %}As guest you see the public subset of parameters.{% endif %}</p>
+<p class="sub">Derived from L0 headers, auxiliary and L1 products by plug-in algorithms, by windowed analyses, or entered manually / by external tools. {% if not user.is_expert %}As guest you see the public subset of parameters.{% endif %}</p>
 {% for g, ps in groups %}
 <div class="panel" style="margin-bottom:14px">
   <h2>{{ g }}</h2>
   <div class="table-wrap"><table>
     <tr><th>Status</th><th>Parameter</th><th>Code</th><th>Unit</th><th class="n">Latest value</th><th>Latest (data time)</th>
-        <th>Warning limits</th><th>Alarm limits</th><th class="n">Samples</th>{% if user.is_expert %}<th>Algorithm</th><th>Visibility</th>{% endif %}</tr>
+        <th>Warning limits</th><th>Alarm limits</th><th class="n">Samples</th>{% if user.is_expert %}<th>Producer</th><th>Visibility</th>{% endif %}</tr>
     {% for p in ps %}
     {% set lv = p.state.level if p.state else 0 %}{% set lim = p.current_limit %}
     <tr>
-      <td><span class="st {{ LEVEL_CLASS[lv] }}">{{ LEVEL_CLASS[lv] }}</span></td>
-      <td><a href="/parameters/{{ p.code }}" title="{{ p.description }}">{{ p.name }}</a></td>
+      <td>{% if p.kind == 'scalar' %}<span class="st {{ LEVEL_CLASS[lv] }}">{{ LEVEL_CLASS[lv] }}</span>{% else %}<span class="tag">spectrum</span>{% endif %}</td>
+      <td><a href="/parameters/{{ p.code }}" title="{{ p.description }}">{{ p.name }}</a>{% if p.dims %} <span class="sub">per {{ p.dims }}</span>{% endif %}</td>
       <td class="mono">{{ p.code }}</td><td>{{ p.unit }}</td>
       <td class="n">{{ p.state.last_value|num if p.state else '–' }}</td>
       <td>{{ p.state.last_time|fmt if p.state else '–' }}</td>
       <td>{% if lim %}{{ lim.warn_lo|num if lim.warn_lo is not none else '–' }} … {{ lim.warn_hi|num if lim.warn_hi is not none else '–' }}{% endif %}</td>
       <td>{% if lim %}{{ lim.alarm_lo|num if lim.alarm_lo is not none else '–' }} … {{ lim.alarm_hi|num if lim.alarm_hi is not none else '–' }}{% endif %}</td>
       <td class="n">{{ counts.get(p.id, 0) }}</td>
-      {% if user.is_expert %}<td class="mono">{{ p.algorithm }}</td><td><span class="tag">{{ p.visibility }}</span></td>{% endif %}
+      {% if user.is_expert %}<td class="mono">{{ p.algorithm }}</td><td><span class="tag">{{ p.visibility }}</span>{% if p.origin != 'config' %} <span class="tag">{{ p.origin }}</span>{% endif %}</td>{% endif %}
     </tr>
     {% endfor %}
   </table></div>

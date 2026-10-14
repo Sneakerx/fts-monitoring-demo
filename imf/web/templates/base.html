@@ -17,6 +17,8 @@
     {{ nav('/', 'Dashboard') }}
     {{ nav('/parameters', 'Parameters') }}
     {{ nav('/explorer', 'Explorer') }}
+    {{ nav('/map', 'Map') }}
+    {{ nav('/timeline', 'Timeline') }}
     {% if user.is_expert %}{{ nav('/events', 'Events') }}{{ nav('/products', 'Products') }}{% endif %}
     {{ nav('/reports', 'Reports') }}
     {% if user.is_admin %}{{ nav('/admin', 'Admin') }}{% endif %}

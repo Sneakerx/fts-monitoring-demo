@@ -2,6 +2,10 @@
 {% block title %}Administration{% endblock %}
 {% block content %}
 <h1>Administration</h1>
+<div class="toolbar"><span class="sub">Sections:</span>
+  {% for a, l in [('system', 'System'), ('campaigns', 'Reprocessing'), ('mdb', 'MDB management'), ('tokens', 'API tokens'), ('rules', 'Rules'), ('users', 'Users'), ('limits', 'Limits'), ('audit', 'Audit log')] %}
+  <a class="btn secondary small" href="#{{ a }}">{{ l }}</a>{% endfor %}
+</div>
 
 <div class="grid g2" id="system">
   <div class="panel">
@@ -9,14 +13,15 @@
     <dl class="kv">
       <dt>PDGS endpoint</dt><dd class="mono">{{ settings.pdgs.base_url }}</dd>
       <dt>PDGS reachable</dt><dd>{% if pdgs_status %}<span class="st NOMINAL">yes</span> <span class="sub">mission time {{ pdgs_status.sim_time[:16] }} (simulator ×{{ '%.0f'|format(pdgs_status.accel) }})</span>{% else %}<span class="st ALARM">no</span>{% endif %}</dd>
-      <dt>Product type</dt><dd>{{ settings.pdgs.product_type }} · poll every {{ settings.pdgs.poll_interval_s }} s</dd>
+      <dt>Product types</dt><dd>{% for t in settings.pdgs.product_types %}<span class="tag">{{ t.type }} · {{ t.level }} · {{ t.mode }}</span> {% endfor %}<br><span class="sub">poll every {{ settings.pdgs.poll_interval_s }} s</span></dd>
+      <dt>Nominal baseline</dt><dd>{{ settings.pdgs.baseline }}{% if baselines|length > 1 %} <span class="sub">(in MDB: {{ baselines|join(', ') }})</span>{% endif %}</dd>
       <dt>Poller</dt><dd>{{ 'running' if poll_busy else 'idle' }}</dd>
-      <dt>Database</dt><dd class="mono">{{ settings.database.url.split('///')[0] }} · {{ db_stats.products }} products · {{ db_stats.samples }} samples · {{ db_stats.reports }} reports</dd>
+      <dt>Database</dt><dd class="mono">{{ settings.database.url.split('///')[0] }} · {{ db_stats.products }} products · {{ db_stats.samples }} samples · {{ db_stats.vectors }} spectra · {{ db_stats.reports }} reports</dd>
       <dt>Scheduled jobs</dt><dd>{% for j in jobs %}{{ j.name }} <span class="sub">next {{ j.next|string|truncate(19, True, '') }}</span><br>{% else %}scheduler not running{% endfor %}</dd>
     </dl>
     <div class="toolbar" style="margin-top:12px">
       <form method="post" action="/admin/jobs/poll" style="margin:0"><button class="btn small">Poll PDGS now</button></form>
-      <form method="post" action="/admin/jobs/reports" style="margin:0"><button class="btn small secondary">Check periodic reports</button></form>
+      <form method="post" action="/admin/jobs/postprocess" style="margin:0"><button class="btn small secondary">Run analyses, trend rules + reports</button></form>
     </div>
   </div>
   <div class="panel">
@@ -27,6 +32,141 @@
       <tr><td>{{ r.started_at|fmts }}</td><td class="sub">{{ r.trigger }}</td><td class="n">{{ r.found }}</td><td class="n">{{ r.processed }}</td>
           <td class="n">{{ r.failed }}</td><td class="n">{{ r.skipped }}</td><td class="sub">{{ (r.error or '')[:60] }}</td></tr>
       {% endfor %}
+    </table>
+  </div>
+</div>
+
+<div class="panel" style="margin-top:16px" id="campaigns">
+  <h2>Reprocessing campaigns <span class="sub">ingest a re-processed baseline over the full mission (or a period) in parallel to the nominal operation; results are kept per baseline and compared with the baseline selector</span></h2>
+  <div class="table-wrap"><table>
+    <tr><th>#</th><th>Name</th><th>Baseline</th><th>Type</th><th>Period</th><th>Status</th><th class="n">Found</th><th class="n">Processed</th><th class="n">Failed</th><th>Started / finished</th><th></th></tr>
+    {% for c in campaigns %}
+    <tr><td>{{ c.id }}</td><td>{{ c.name }}</td><td>{{ c.baseline }}</td><td class="mono">{{ c.product_type }}</td>
+        <td class="sub">{{ c.start|fmt if c.start else 'mission start' }} – {{ c.end|fmt if c.end else 'now' }}</td>
+        <td><span class="st {{ {'DONE': 'CLOSED', 'RUNNING': 'ACKNOWLEDGED', 'FAILED': 'ALARM'}.get(c.status, '') }}">{{ c.status }}{{ ' (worker active)' if running[c.id] }}</span>{% if c.error %}<br><span class="sub">{{ c.error[:80] }}</span>{% endif %}</td>
+        <td class="n">{{ c.n_found }}</td><td class="n">{{ c.n_processed }}</td><td class="n">{{ c.n_failed }}</td>
+        <td class="sub">{{ c.started_at|fmt }}<br>{{ c.finished_at|fmt }}</td>
+        <td style="white-space:nowrap">
+          {% if not running[c.id] and c.status != 'RUNNING' %}<form method="post" action="/admin/campaigns/{{ c.id }}/start" style="display:inline;margin:0"><button class="btn small">{{ 'Start' if c.status == 'PLANNED' else 'Resume / update' }}</button></form>{% endif %}
+          {% if c.status in ('PLANNED', 'RUNNING') %}<form method="post" action="/admin/campaigns/{{ c.id }}/cancel" style="display:inline;margin:0"><button class="btn small secondary">Cancel</button></form>{% endif %}
+        </td></tr>
+    {% else %}<tr><td colspan="11" class="muted">No campaigns.</td></tr>{% endfor %}
+  </table></div>
+  <form method="post" action="/admin/campaigns" class="toolbar" style="margin-top:12px">
+    <input type="text" name="name" placeholder="name, e.g. REPRO-B04" required style="width:150px">
+    <input type="text" name="baseline" placeholder="baseline, e.g. B04" required style="width:110px">
+    <input type="text" name="product_type" value="FTS_L1B" style="width:100px">
+    <input type="text" name="start" placeholder="start (optional)" style="width:140px">
+    <input type="text" name="end" placeholder="end (optional)" style="width:140px">
+    <label class="sub"><input type="checkbox" name="run" value="true" checked> start now</label>
+    <button class="btn small">Create campaign</button>
+  </form>
+  <p class="sub">A campaign can also be run as a separate process (e.g. on another node): <span class="mono">python -m imf.cli campaign run &lt;id&gt;</span>.</p>
+</div>
+
+<div class="panel" style="margin-top:16px" id="mdb">
+  <h2>Monitoring database management</h2>
+  <div class="grid g2">
+    <div>
+      <h3>Backup / check / repair</h3>
+      <div class="toolbar">
+        <form method="post" action="/admin/mdb/backup" style="margin:0"><button class="btn small">Create backup</button></form>
+        <form method="post" action="/admin/mdb/check" style="margin:0"><button class="btn small secondary">Check consistency</button></form>
+        <form method="post" action="/admin/mdb/repair" style="margin:0" onsubmit="return confirm('Rebuild all series states and reconcile open events?')"><button class="btn small secondary">Repair</button></form>
+      </div>
+      {% if check_result %}
+      <div class="flash {{ '' if check_result.ok else 'error' }}"><b>Check {{ 'OK' if check_result.ok else 'found problems: ' ~ check_result.problems|join(', ') }}</b>
+        <pre class="mono" style="white-space:pre-wrap;margin:6px 0 0">{{ check_result|tojson(indent=1) }}</pre></div>
+      {% endif %}
+      <table>
+        <tr><th>Backup</th><th class="n">Size</th><th>Schema</th><th>SHA-256</th></tr>
+        {% for b in backups[:8] %}<tr><td><a class="mono" href="/admin/mdb/backups/{{ b.name }}">{{ b.name }}</a></td><td class="n">{{ (b.size / 1048576)|round(1) }} MB</td><td>{{ b.schema_revision }}</td><td class="mono sub">{{ (b.sha256 or '')[:12] }}</td></tr>
+        {% else %}<tr><td colspan="4" class="muted">No backups in {{ settings.processing.backup_dir }}</td></tr>{% endfor %}
+      </table>
+      <p class="sub">Restore (IMF stopped): <span class="mono">python -m imf.cli db restore &lt;file&gt;</span> — the backup checksum and integrity are verified first.</p>
+
+      <h3 style="margin-top:16px">Export</h3>
+      <form method="get" action="/api/export" class="toolbar">
+        <input type="text" name="start" placeholder="start (optional)" style="width:140px">
+        <input type="text" name="end" placeholder="end (optional)" style="width:140px">
+        <select name="baseline"><option value="">all baselines</option>{% for b in baselines %}<option>{{ b }}</option>{% endfor %}</select>
+        <input type="text" name="codes" placeholder="codes (optional, comma separated)" style="width:200px">
+        <button class="btn small">Download ZIP</button>
+      </form>
+      <p class="sub">CSV / JSON files: samples (with entry type, source, entry time), spectra, events, timeline, products (with checksums), reference data and metadata.</p>
+    </div>
+    <div>
+      <h3>Import / populate</h3>
+      <form method="post" action="/admin/mdb/import" enctype="multipart/form-data" class="toolbar">
+        <select name="what">
+          <option value="samples">Samples CSV (time, code, value[, dims][, baseline])</option>
+          <option value="timeline">Timeline CSV (type, title, start[, stop])</option>
+          <option value="reference">Reference data CSV ([dims…,] axis, value)</option>
+        </select>
+        <input type="text" name="name" placeholder="reference name" style="width:130px">
+        <input type="text" name="unit" placeholder="unit" style="width:70px">
+        <input type="file" name="file" required>
+        <button class="btn small">Import</button>
+      </form>
+      <details><summary>Create a new (manual / external) parameter</summary>
+        <form method="post" action="/admin/mdb/parameters" class="toolbar" style="margin-top:8px">
+          <input type="text" name="code" placeholder="CODE" required style="width:120px">
+          <input type="text" name="name" placeholder="name" required style="width:180px">
+          <input type="text" name="unit" placeholder="unit" style="width:70px">
+          <input type="text" name="group" value="Manual" style="width:100px">
+          <select name="kind"><option>scalar</option><option>vector</option></select>
+          <input type="text" name="dims" placeholder="dims (optional)" style="width:110px">
+          <select name="visibility"><option>restricted</option><option>public</option></select>
+          <input type="text" name="description" placeholder="description" style="width:100%">
+          <button class="btn small">Create parameter</button>
+        </form>
+      </details>
+
+      <h3 style="margin-top:16px">Remove part of the MDB</h3>
+      <form method="post" action="/admin/mdb/purge" class="toolbar">
+        <select name="baseline"><option value="">any baseline</option>{% for b in baselines %}<option>{{ b }}</option>{% endfor %}</select>
+        <select name="product_type"><option value="">any product type</option>{% for t in product_types %}<option>{{ t }}</option>{% endfor %}</select>
+        <select name="parameter"><option value="">(products) / parameter…</option>{% for p in params %}<option value="{{ p.code }}">{{ p.code }}</option>{% endfor %}</select>
+        <input type="text" name="start" placeholder="start" style="width:130px">
+        <input type="text" name="end" placeholder="end" style="width:130px">
+        <label class="sub"><input type="checkbox" name="reset_watermarks" value="true"> allow re-ingestion</label>
+        <button class="btn small secondary">Preview</button>
+      </form>
+      {% if purge_preview %}
+      <div class="flash error">Purge <b>{{ purge_preview.describe }}</b> would delete: {{ purge_preview.counts }}
+        <form method="post" action="/admin/mdb/purge" style="margin:6px 0 0">
+          {% for k, v in purge_preview.filter.items() %}{% if v %}<input type="hidden" name="{{ k }}" value="{{ 'true' if v is sameas true else v }}">{% endif %}{% endfor %}
+          <input type="hidden" name="confirm" value="true">
+          <button class="btn small">Confirm purge</button>
+        </form></div>
+      {% endif %}
+      <p class="sub">Product-based filters remove the products and everything derived from them; a parameter filter removes only that parameter's data. Series states are rebuilt afterwards; all purges are audited.</p>
+    </div>
+  </div>
+</div>
+
+<div class="grid g2" style="margin-top:16px">
+  <div class="panel" id="tokens">
+    <h2>API tokens <span class="sub">external tools: <span class="mono">Authorization: Bearer …</span> on <a href="/api/docs">/api/v1</a></span></h2>
+    {% if new_token %}<div class="flash">Token for <b>{{ new_token.name }}</b> (shown once):<br><span class="mono" style="word-break:break-all">{{ new_token.token }}</span></div>{% endif %}
+    <table>
+      <tr><th>Name</th><th>Role</th><th>Active</th><th>Created</th><th>Last used</th><th></th></tr>
+      {% for t in tokens %}<tr><td>{{ t.name }}</td><td>{{ t.role }}</td><td>{{ 'yes' if t.active else 'revoked' }}</td><td class="sub">{{ t.created_at|fmt }} · {{ t.created_by }}</td><td class="sub">{{ t.last_used|fmt }}</td>
+        <td>{% if t.active %}<form method="post" action="/admin/tokens/{{ t.id }}/revoke" style="margin:0"><button class="btn small secondary">revoke</button></form>{% endif %}</td></tr>
+      {% else %}<tr><td colspan="6" class="muted">No tokens.</td></tr>{% endfor %}
+    </table>
+    <form method="post" action="/admin/tokens" class="toolbar" style="margin-top:10px">
+      <input type="text" name="name" placeholder="tool name" required style="width:160px">
+      <select name="role"><option>expert</option><option>admin</option></select>
+      <button class="btn small">Create token</button>
+    </form>
+  </div>
+  <div class="panel" id="rules">
+    <h2>Rules <span class="sub">trigger → recommended action / proposed output (nominal baseline only)</span></h2>
+    <table>
+      <tr><th>Rule</th><th>Kind</th><th>Description</th><th>Configuration</th></tr>
+      {% for code, r in rules.items() %}<tr><td class="mono">{{ code }}</td><td>{{ r.kind }}</td><td>{{ r.description }}</td>
+        <td class="mono sub">{{ rule_cfg(r) or r.watches|join(', ') }}</td></tr>{% endfor %}
     </table>
   </div>
 </div>
@@ -54,17 +194,17 @@
       <td><button form="newuser" class="btn small">Add user</button></td><td></td>
     </tr>
   </table></div>
-  <p class="sub">Guest: dashboard, public parameters, published reports · Expert: + all parameters, products, events (acknowledge), annotations, CSV export, ad-hoc reports · Admin: + users, limits, visibility, jobs, audit log.</p>
+  <p class="sub">Guest: dashboard, public parameters, map, timeline, published reports · Expert: + all parameters, products, events (acknowledge, approve proposed outputs), annotations, manual values, timeline entries, CSV / MDB export, ad-hoc reports · Admin: + users, limits, requirements, visibility, campaigns, MDB import / purge / backup / repair, API tokens, jobs, audit log.</p>
 </div>
 
 <div class="panel" style="margin-top:16px" id="limits">
-  <h2>Parameter limits &amp; visibility <span class="sub">every change creates a new limit version and an audit entry; limits apply to new data</span></h2>
+  <h2>Parameter limits &amp; visibility <span class="sub">every change creates a new limit version and an audit entry; limits apply to new data · requirements: on the parameter page</span></h2>
   <div class="table-wrap"><table>
     <tr><th>Parameter</th><th>Unit</th><th>Warn low</th><th>Warn high</th><th>Alarm low</th><th>Alarm high</th><th>Persist.</th><th>Comment</th><th></th><th>Visibility</th></tr>
-    {% for p in params %}{% set l = p.current_limit %}
+    {% for p in params %}{% if p.kind == 'scalar' %}{% set l = p.current_limit %}
     {% set fid = 'l-' ~ p.code %}
     <tr>
-      <td><form id="{{ fid }}" method="post" action="/admin/limits/{{ p.code }}"></form><a href="/parameters/{{ p.code }}">{{ p.name }}</a></td><td>{{ p.unit }}</td>
+      <td><form id="{{ fid }}" method="post" action="/admin/limits/{{ p.code }}"></form><a href="/parameters/{{ p.code }}">{{ p.name }}</a>{% if p.current_requirement %} <span class="tag">req.</span>{% endif %}</td><td>{{ p.unit }}</td>
       {% for f in ['warn_lo', 'warn_hi', 'alarm_lo', 'alarm_hi'] %}
       <td><input form="{{ fid }}" class="small" name="{{ f }}" value="{{ l[f] if l and l[f] is not none }}"></td>{% endfor %}
       <td><input form="{{ fid }}" class="small" type="number" min="1" name="persistence" value="{{ l.persistence if l else 1 }}" style="width:56px"></td>
@@ -72,7 +212,7 @@
       <td><button form="{{ fid }}" class="btn small secondary">Save</button></td>
       <td><form method="post" action="/admin/visibility/{{ p.code }}" style="margin:0"><button class="btn small {{ '' if p.visibility == 'public' else 'secondary' }}">{{ p.visibility }}</button></form></td>
     </tr>
-    {% endfor %}
+    {% endif %}{% endfor %}
   </table></div>
 </div>
 

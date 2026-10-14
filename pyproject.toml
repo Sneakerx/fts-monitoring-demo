@@ -7,6 +7,7 @@ dependencies = [
     "fastapi",
     "uvicorn[standard]",
     "sqlalchemy>=2.0",
+    "alembic>=1.13",
     "jinja2",
     "apscheduler>=3.10,<4",
     "numpy",
@@ -21,6 +22,13 @@ dependencies = [
 
 [project.optional-dependencies]
 test = ["pytest"]
+
+[project.scripts]
+imf = "imf.cli:main"
+
+[project.entry-points."imf.algorithms"]
+# External algorithm packages register their modules here, e.g.
+# my_tool = "my_package.algorithms"
 
 [tool.setuptools]
 packages = ["imf", "pdgs_sim"]

@@ -2,13 +2,14 @@
 
 The IMF depends only on the `PdgsClient` interface; adapting to an operational PDGS
 (e.g. a PRIP/LTA or the Copernicus Data Space OData API) means changing the base URL,
-product type and - if required - adding authentication here.
+product types and - if required - adding authentication here.
 """
 from __future__ import annotations
 
+import hashlib
 import logging
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 
@@ -29,6 +30,11 @@ class ProductEntry:
     publication_date: datetime
     size_bytes: int | None
     orbit: int | None
+    attributes: dict = field(default_factory=dict)
+
+    @property
+    def baseline(self) -> str:
+        return str(self.attributes.get("baseline", ""))
 
 
 class PdgsError(RuntimeError):
@@ -36,7 +42,7 @@ class PdgsError(RuntimeError):
 
 
 class PdgsClient:
-    def __init__(self, base_url: str, product_type: str, timeout_s: float = 30.0, retries: int = 3,
+    def __init__(self, base_url: str, product_type: str = "FTS_L1B", timeout_s: float = 30.0, retries: int = 3,
                  transport: httpx.BaseTransport | None = None):
         self.base_url = base_url.rstrip("/")
         self.product_type = product_type
@@ -63,28 +69,37 @@ class PdgsClient:
                 delay *= 2
         raise AssertionError("unreachable")
 
-    def query_new(self, published_after: datetime | None, top: int = 100) -> list[ProductEntry]:
-        flt = f"ProductType eq '{self.product_type}'"
+    def query_new(self, published_after: datetime | None, top: int = 100, product_type: str | None = None,
+                  baseline: str | None = None) -> list[ProductEntry]:
+        ptype = product_type or self.product_type
+        flt = f"ProductType eq '{ptype}'"
         if published_after is not None:
             flt += f" and PublicationDate gt {iso(published_after)}"
+        if baseline:
+            flt += (" and Attributes/OData.CSC.StringAttribute/any(att:att/Name eq 'baseline' and "
+                    f"att/OData.CSC.StringAttribute/Value eq '{baseline}')")
         r = self._get(f"{self.base_url}/Products",
-                      params={"$filter": flt, "$orderby": "PublicationDate asc", "$top": str(top)})
+                      params={"$filter": flt, "$orderby": "PublicationDate asc", "$top": str(top),
+                              "$expand": "Attributes"})
         out = []
         for v in r.json().get("value", []):
+            attrs = {a["Name"]: a.get("Value") for a in v.get("Attributes", []) if "Name" in a}
             out.append(ProductEntry(
-                pdgs_id=v["Id"], name=v["Name"], product_type=v.get("ProductType", self.product_type),
+                pdgs_id=v["Id"], name=v["Name"], product_type=v.get("ProductType", ptype),
                 sensing_start=parse_iso(v["ContentDate"]["Start"]),
                 sensing_stop=parse_iso(v["ContentDate"]["End"]),
                 publication_date=parse_iso(v["PublicationDate"]),
-                size_bytes=v.get("ContentLength"), orbit=v.get("OrbitNumber"),
+                size_bytes=v.get("ContentLength"), orbit=v.get("OrbitNumber", attrs.get("orbitNumber")),
+                attributes=attrs,
             ))
         return out
 
-    def download(self, entry: ProductEntry, target_dir: Path) -> Path:
+    def download(self, entry: ProductEntry, target_dir: Path) -> tuple[Path, str]:
+        """Download a product; returns (path, sha256)."""
         target_dir.mkdir(parents=True, exist_ok=True)
         target = target_dir / entry.name
         r = self._get(f"{self.base_url}/Products({entry.pdgs_id})/$value")
         tmp = target.with_suffix(target.suffix + ".part")
         tmp.write_bytes(r.content)
         tmp.replace(target)
-        return target
+        return target, hashlib.sha256(r.content).hexdigest()

@@ -1,6 +1,7 @@
 fastapi
 uvicorn[standard]
 sqlalchemy>=2.0
+alembic>=1.13
 jinja2
 apscheduler>=3.10,<4
 numpy

@@ -18,13 +18,15 @@
   .kpi .v { font-size: 22px; font-weight: 600; }
   .kpi .l { font-size: 12px; color: var(--muted); }
   table { border-collapse: collapse; width: 100%; font-size: 12.5px; }
-  th, td { border-bottom: 1px solid var(--line); padding: 5px 8px; text-align: left; }
+  th, td { border-bottom: 1px solid var(--line); padding: 5px 8px; text-align: left; vertical-align: top; }
   th { background: #f3f5f8; }
   td.n { text-align: right; font-variant-numeric: tabular-nums; }
   .st { font-weight: 600; padding: 2px 8px; border-radius: 10px; font-size: 11px; }
   .NOMINAL { color: var(--ok); background: var(--okbg); }
   .WARNING { color: var(--warn); background: var(--warnbg); }
   .ALARM { color: var(--alarm); background: var(--alarmbg); }
+  .INFO { color: #1f5fa8; background: #e7eef8; }
+  small, .muted { color: var(--muted); }
   img { max-width: 100%; border: 1px solid var(--line); border-radius: 6px; margin: 8px 0; }
   footer { color: var(--muted); font-size: 11px; padding: 0 32px 24px; }
 </style>
@@ -32,16 +34,18 @@
 <body>
 <header>
   <h1>{{ title }}</h1>
-  <p>{{ mission.instrument }} · Period {{ start|fmt }} – {{ end|fmt }} UTC · Generated {{ generated|fmt }} UTC by {{ created_by }}</p>
+  <p>{{ mission.instrument }} · Period {{ start|fmt }} – {{ end|fmt }} UTC · Baseline {{ baseline }} · Generated {{ generated|fmt }} UTC by {{ created_by }}</p>
 </header>
 <main>
   <h2>Summary</h2>
   <div class="kpis">
     <div class="kpi"><div class="v"><span class="st {{ overall }}">{{ overall }}</span></div><div class="l">Overall status</div></div>
-    <div class="kpi"><div class="v">{{ n_products }} / {{ n_expected }}</div><div class="l">Products received / expected</div></div>
-    <div class="kpi"><div class="v">{{ "%.1f"|format(completeness) }} %</div><div class="l">Data completeness</div></div>
+    <div class="kpi"><div class="v">{{ n_products }} / {{ n_expected }}</div><div class="l">L1 products received / expected</div></div>
+    <div class="kpi"><div class="v">{{ "%.1f"|format(completeness) }} %</div><div class="l">L1 data completeness</div></div>
+    <div class="kpi"><div class="v">{{ n_l0 }}</div><div class="l">L0 products (headers)</div></div>
     <div class="kpi"><div class="v">{{ n_failed }}</div><div class="l">Failed products</div></div>
     <div class="kpi"><div class="v">{{ events|length }}</div><div class="l">Events active in period</div></div>
+    <div class="kpi"><div class="v">{{ actions|length }}</div><div class="l">Actions recommended</div></div>
   </div>
 
   <h2>Parameter statistics</h2>
@@ -49,7 +53,7 @@
     <tr><th>Group</th><th>Parameter</th><th>Unit</th><th>N</th><th>Min</th><th>Mean</th><th>Max</th><th>Std</th><th>#Warn</th><th>#Alarm</th><th>Status</th></tr>
     {% for st in stats %}
     <tr>
-      <td>{{ st.param.group }}</td><td title="{{ st.param.description }}">{{ st.param.name }} <small>({{ st.param.code }})</small></td>
+      <td>{{ st.param.group }}</td><td title="{{ st.param.description }}">{{ st.param.name }} <small>({{ st.param.code }}{% if st.n_series > 1 %}, {{ st.n_series }} series{% endif %})</small></td>
       <td>{{ st.param.unit }}</td><td class="n">{{ st.n }}</td>
       <td class="n">{{ st.min|num }}</td><td class="n">{{ st.mean|num }}</td><td class="n">{{ st.max|num }}</td><td class="n">{{ st.std|num }}</td>
       <td class="n">{{ st.n_warn }}</td><td class="n">{{ st.n_alarm }}</td>
@@ -58,21 +62,63 @@
     {% endfor %}
   </table>
 
+  {% if compliance %}
+  <h2>Requirement compliance</h2>
+  <table>
+    <tr><th>Parameter</th><th>Requirement</th><th>Reference</th><th class="n">N</th><th class="n">Compliant</th><th class="n">Mean</th><th class="n">Std</th><th class="n">Min</th><th class="n">Max</th></tr>
+    {% for c in compliance %}
+    <tr><td>{{ c.param.name }}</td><td>{{ c.req.text }}</td><td><small>{{ c.req.reference }}</small></td><td class="n">{{ c.n }}</td>
+        <td class="n"><span class="st {{ 'NOMINAL' if c.pct is not none and c.pct >= 99 else ('WARNING' if c.pct is not none and c.pct >= 90 else 'ALARM') }}">{{ c.pct|num }} %</span></td>
+        <td class="n">{{ c.mean|num }}</td><td class="n">{{ c.std|num }}</td><td class="n">{{ c.min|num }}</td><td class="n">{{ c.max|num }}</td></tr>
+    {% endfor %}
+  </table>
+  {% endif %}
+
   <h2>Events</h2>
   {% if events %}
   <table>
-    <tr><th>#</th><th>Severity</th><th>Parameter</th><th>Onset (data time)</th><th>Value</th><th>Limit</th><th>Cleared</th><th>Status</th></tr>
+    <tr><th>#</th><th>Severity</th><th>Category</th><th>Parameter / rule</th><th>Onset (data time)</th><th>Value</th><th>Limit / action</th><th>Cleared</th><th>Status</th></tr>
     {% for e in events %}
-    <tr><td>{{ e.id }}</td><td><span class="st {{ e.severity }}">{{ e.severity }}</span></td><td>{{ e.parameter.name }}</td>
-        <td>{{ e.time|fmt }}</td><td class="n">{{ e.value|num }} {{ e.parameter.unit }}</td><td>{{ e.limit_text }}</td>
+    <tr><td>{{ e.id }}</td><td><span class="st {{ e.severity }}">{{ e.severity }}</span></td><td>{{ e.category }}</td><td>{{ e.label }}</td>
+        <td>{{ e.time|fmt }}</td><td class="n">{{ e.value|num }} {{ e.parameter.unit if e.parameter else '' }}</td>
+        <td>{{ e.limit_text }}{% if e.recommended_action %}<br><small>→ {{ e.recommended_action }}</small>{% endif %}</td>
         <td>{{ e.cleared_at|fmt }}</td><td>{{ e.status }}</td></tr>
     {% endfor %}
   </table>
   {% else %}<p>No events in this period.</p>{% endif %}
 
+  {% if actions %}
+  <h2>Recommended actions and proposed outputs</h2>
+  <table>
+    <tr><th>#</th><th>Rule</th><th>Recommended action</th><th>Proposed outputs (expert approval)</th></tr>
+    {% for e in actions %}
+    <tr><td>{{ e.id }}</td><td>{{ e.rule }}</td><td>{{ e.recommended_action or e.title }}</td>
+        <td>{% for po in e.proposals %}{{ po.title }}{% if po.value is not none %}: {{ po.value|num }} {{ po.unit }}{% endif %} <small>[{{ po.status }}]</small><br>{% else %}–{% endfor %}</td></tr>
+    {% endfor %}
+  </table>
+  {% endif %}
+
+  {% if timeline %}
+  <h2>Mission timeline</h2>
+  <table>
+    <tr><th>Start</th><th>Stop</th><th>Type</th><th>Entry</th><th>Source</th></tr>
+    {% for t in timeline %}
+    <tr><td>{{ t.start|fmt }}</td><td>{{ t.stop|fmt if t.stop else 'ongoing' }}</td><td>{{ t.type }}</td><td>{{ t.title }}</td><td><small>{{ t.source }}</small></td></tr>
+    {% endfor %}
+  </table>
+  {% endif %}
+
+  {% if spectra %}
+  <h2>Spectral NESR vs. spectral template</h2>
+  <table>
+    <tr><th>Band</th><th class="n">Orbit spectra</th><th class="n">Mean NESR / template</th></tr>
+    {% for c in spectra %}<tr><td>{{ c.band }}</td><td class="n">{{ c.n }}</td><td class="n">{{ c.ratio|num }}</td></tr>{% endfor %}
+  </table>
+  {% endif %}
+
   <h2>Trend plots</h2>
   {% for group, b64 in plots %}
-  <img alt="{{ group }} parameters" src="data:image/png;base64,{{ b64 }}">
+  <img alt="{{ group }}" src="data:image/png;base64,{{ b64 }}">
   {% endfor %}
 </main>
 <footer>Instrument Monitoring Facility · automatically generated report · limits: dashed = warning, solid = alarm</footer>

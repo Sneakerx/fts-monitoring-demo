@@ -15,10 +15,12 @@ SERIES = "#1f5fa8"
 WARN = "#d99a00"
 ALARM = "#c62828"
 GRID = "#d9dee5"
+PALETTE = ["#1f5fa8", "#d1495b", "#2a9d8f", "#8e3b9a", "#e9a03b", "#3d5a80", "#6a994e", "#bc6c25",
+           "#5e548e", "#9c6644", "#264653", "#e76f51"]
 
 
 def group_figure(group: str, series: list[dict], start: datetime, end: datetime) -> Figure:
-    """series: [{code, name, unit, times, values, limit (Limit|None), events: [(time, severity)]}]"""
+    """series: [{code, name, unit, limit (Limit|None), lines: [{label, times, values, levels}]}]"""
     n = len(series)
     fig = Figure(figsize=(11.0, 1.9 * n + 0.8), layout="constrained")
     fig.suptitle(f"{group} parameters", fontsize=12, color=INK, x=0.01, ha="left", fontweight="bold")
@@ -30,14 +32,20 @@ def group_figure(group: str, series: list[dict], start: datetime, end: datetime)
                              (lim.alarm_lo, ALARM, "-"), (lim.alarm_hi, ALARM, "-")):
                 if v is not None:
                     ax.axhline(v, color=c, lw=1.0, ls=ls, alpha=0.9)
-        if sr["times"]:
-            ax.plot(sr["times"], sr["values"], ".-", ms=3, lw=0.8, color=SERIES)
-            colors = {1: WARN, 2: ALARM}
-            for lvl, c in colors.items():
-                pts = [(t, v) for t, v, l in zip(sr["times"], sr["values"], sr["levels"]) if l == lvl]
-                if pts:
-                    ax.plot([p[0] for p in pts], [p[1] for p in pts], "o", ms=4, color=c, zorder=3)
-            _autoscale(ax, sr["values"], lim)
+        lines = [ln for ln in sr["lines"] if ln["times"]]
+        if lines:
+            multi = len(lines) > 1
+            for i, ln in enumerate(lines):
+                color = PALETTE[i % len(PALETTE)] if multi else SERIES
+                ax.plot(ln["times"], ln["values"], ".-", ms=2.5 if multi else 3, lw=0.6 if multi else 0.8,
+                        color=color, label=ln["label"] or None)
+                for lvl, c in {1: WARN, 2: ALARM}.items():
+                    pts = [(t, v) for t, v, l in zip(ln["times"], ln["values"], ln["levels"]) if l == lvl]
+                    if pts:
+                        ax.plot([p[0] for p in pts], [p[1] for p in pts], "o", ms=4, color=c, zorder=3)
+            if multi and len(lines) <= 12:
+                ax.legend(fontsize=6, ncol=min(6, len(lines)), loc="upper left", frameon=False)
+            _autoscale(ax, [v for ln in lines for v in ln["values"]], lim)
         else:
             ax.text(0.5, 0.5, "no data in period", transform=ax.transAxes, ha="center", va="center",
                     color="#8a94a3")
@@ -51,6 +59,24 @@ def group_figure(group: str, series: list[dict], start: datetime, end: datetime)
     loc = mdates.AutoDateLocator()
     axes[-1].xaxis.set_major_locator(loc)
     axes[-1].xaxis.set_major_formatter(mdates.ConciseDateFormatter(loc))
+    return fig
+
+
+def spectrum_figure(title: str, unit: str, curves: list[dict]) -> Figure:
+    """curves: [{band, axis, values, template_axis, template_values}] - one panel per band."""
+    n = len(curves)
+    fig = Figure(figsize=(11.0, 2.6 * n + 0.6), layout="constrained")
+    fig.suptitle(title, fontsize=12, color=INK, x=0.01, ha="left", fontweight="bold")
+    axes = fig.subplots(n, 1, squeeze=False)[:, 0]
+    for ax, c in zip(axes, curves):
+        ax.plot(c["axis"], c["values"], "-", lw=1.1, color=SERIES, label="measured (period mean)")
+        if c.get("template_axis"):
+            ax.plot(c["template_axis"], c["template_values"], "--", lw=1.1, color=ALARM, label="spectral template")
+        ax.set_title(f"Band {c['band']} [{unit}]", fontsize=9, loc="left", color=INK)
+        ax.set_xlabel("wavenumber [cm⁻¹]", fontsize=8)
+        ax.grid(True, color=GRID, lw=0.6)
+        ax.tick_params(labelsize=8, colors=INK)
+        ax.legend(fontsize=7, frameon=False)
     return fig
 
 

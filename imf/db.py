@@ -11,7 +11,7 @@ from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session, sessionmaker
 
 from .config import Settings
-from .models import AuditLog, Base, Limit, Parameter, ParameterState, SystemState, User
+from .models import AuditLog, Base, Limit, Parameter, ReferenceData, Requirement, SystemState, User
 from .security import hash_password
 
 log = logging.getLogger(__name__)
@@ -35,8 +35,17 @@ class Database:
                 cur.close()
         self.SessionLocal = sessionmaker(bind=self.engine, expire_on_commit=False)
 
+    @property
+    def is_sqlite(self) -> bool:
+        return self.engine.url.get_backend_name() == "sqlite"
+
     def create_all(self) -> None:
+        """Create the schema directly from the models (tests); operational databases use `migrate`."""
         Base.metadata.create_all(self.engine)
+
+    def migrate(self, nominal_baseline: str = "B03") -> None:
+        from .migrate import upgrade
+        upgrade(self, nominal_baseline)
 
     @contextmanager
     def session(self) -> Iterator[Session]:
@@ -51,11 +60,22 @@ class Database:
             s.close()
 
 
-def seed(db: Database, settings: Settings) -> None:
-    """Synchronise parameter definitions and seed users/limits (idempotent)."""
-    from .processing.registry import outputs_index
+def producers_index(settings: Settings) -> dict[str, str]:
+    """Map parameter code -> label of the producing algorithm or analysis."""
+    from .processing.analyses import load_analyses
+    from .processing.registry import configure, outputs_index
 
-    producers = outputs_index()
+    configure(settings.processing.plugin_modules, settings.processing.external_tools)
+    out = {code: f"{a.name} v{a.version}" for code, a in outputs_index().items()}
+    for a in load_analyses(settings.processing.plugin_modules).values():
+        for code in a.outputs:
+            out[code] = f"analysis:{a.name} v{a.version}"
+    return out
+
+
+def seed(db: Database, settings: Settings) -> None:
+    """Synchronise parameter definitions and seed users/limits/requirements/reference data (idempotent)."""
+    producers = producers_index(settings)
     with db.session() as s:
         for i, pc in enumerate(settings.parameters):
             p = s.scalar(select(Parameter).where(Parameter.code == pc.code))
@@ -65,18 +85,33 @@ def seed(db: Database, settings: Settings) -> None:
                 log.info("Registered parameter %s", pc.code)
             # Definitions are configuration-controlled; visibility is admin-managed after creation.
             p.name, p.unit, p.group = pc.name, pc.unit, pc.group
+            p.kind, p.dims, p.origin = pc.kind, pc.dims, "config"
             alg = producers.get(pc.algorithm or pc.code)
             if alg is None:
                 log.warning("No algorithm registered for parameter %s", pc.code)
-            p.algorithm = f"{alg.name} v{alg.version}" if alg else "unassigned"
+            p.algorithm = alg or "unassigned"
             p.description = pc.description
             p.sort_order = i
             s.flush()
             if pc.limits and not p.limits:
                 s.add(Limit(parameter_id=p.id, changed_by="config", comment="initial limits from configuration",
                             **pc.limits.model_dump()))
-            if p.state is None:
-                s.add(ParameterState(parameter_id=p.id))
+            if pc.requirement and not p.requirements:
+                s.add(Requirement(parameter_id=p.id, changed_by="config", **pc.requirement.model_dump()))
+        # manually / externally created parameters are kept after the configured ones
+        n = len(settings.parameters)
+        for j, p in enumerate(s.scalars(select(Parameter).where(Parameter.origin != "config")
+                                        .order_by(Parameter.sort_order, Parameter.id))):
+            p.sort_order = n + j
+
+        for ref in settings.reference_data:
+            if s.scalar(select(ReferenceData.id).where(ReferenceData.name == ref.name).limit(1)) is None:
+                if ref.file.exists():
+                    from .mdb import import_reference_csv
+                    import_reference_csv(s, ref.file, ref.name, unit=ref.unit, description=ref.description,
+                                         author="config")
+                else:
+                    log.warning("Reference data file %s not found", ref.file)
 
         for uc in settings.users:
             if s.scalar(select(User).where(User.username == uc.username)) is None:

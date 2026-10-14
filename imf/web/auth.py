@@ -66,3 +66,20 @@ def require(role: str):
 require_guest = require("guest")
 require_expert = require("expert")
 require_admin = require("admin")
+
+
+def api_writer(request: Request) -> CurrentUser:
+    """Write API (external tools): `Authorization: Bearer <token>` (see Admin -> API tokens) or an
+    expert session. The token's name becomes the source of the entries it writes."""
+    header = request.headers.get("authorization", "")
+    if header.lower().startswith("bearer "):
+        from ..mdb import verify_token
+        with request.app.state.services.db.session() as s:
+            tok = verify_token(s, header[7:].strip())
+            if tok is None:
+                raise LoginRequired()
+            return CurrentUser(username=f"token:{tok.name}", role=tok.role, full_name=tok.name)
+    user = current_user(request)
+    if not has_role(user.role, "expert"):
+        raise Forbidden("expert")
+    return user

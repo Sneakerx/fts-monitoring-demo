@@ -50,7 +50,10 @@ h2 { font-size: 15px; margin: 0 0 12px; }
 .st { display: inline-block; font-weight: 600; padding: 2px 9px; border-radius: 10px; font-size: 11px; letter-spacing: .02em; }
 .NOMINAL, .PROCESSED, .CLOSED { color: var(--ok); background: var(--okbg); }
 .WARNING, .ACKNOWLEDGED { color: var(--warn); background: var(--warnbg); }
-.ALARM, .FAILED, .OPEN { color: var(--alarm); background: var(--alarmbg); }
+.ALARM, .FAILED, .OPEN, .REJECTED { color: var(--alarm); background: var(--alarmbg); }
+.INFO, .DRAFT { color: var(--accent); background: var(--accent-weak); }
+.APPROVED { color: var(--ok); background: var(--okbg); }
+h3 { font-size: 13.5px; margin: 4px 0 8px; }
 .dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 6px; vertical-align: middle; }
 .dot.l0 { background: var(--ok); } .dot.l1 { background: #e0a800; } .dot.l2 { background: var(--alarm); }
 .tag { font-size: 11px; color: var(--muted); border: 1px solid var(--line); padding: 1px 6px; border-radius: 8px; }

@@ -71,6 +71,18 @@ class L1Product:
     def quality_flags(self) -> np.ndarray:
         return self._ds("Data/quality_flag")
 
+    def scan_direction(self) -> np.ndarray:
+        """0 = forward, 1 = reverse (per spectrogram)."""
+        return self._ds("Data/scan_direction")
+
+    def nesr_index(self) -> np.ndarray:
+        """(n_spectrograms, n_subbands) NESR index, spectrally binned by the L1 processor."""
+        return self._ds("Quality/nesr_index").astype(np.float64)
+
+    def nesr_spectral(self, band: str) -> np.ndarray:
+        """(n_spectrograms, n_channels) spectrally resolved NESR estimate [nW/(cm2 sr cm-1)]."""
+        return self._ds(f"Quality/Band{band[-1]}/nesr_spectral").astype(np.float64)
+
     def housekeeping(self, name: str) -> np.ndarray:
         return self._ds(f"Housekeeping/{name}")
 
