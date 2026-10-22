@@ -118,7 +118,7 @@
       <details style="margin-top:10px"><summary>Enter a value manually (entry type 'manual')</summary>
         <form method="post" action="/parameters/{{ p.code }}/samples">
           <p><input type="text" name="time" placeholder="YYYY-MM-DDTHH:MM" required style="width:48%"> <input type="text" name="value" placeholder="value [{{ p.unit }}]" required style="width:48%"></p>
-          {% if p.dims %}<p><input type="text" name="dims" placeholder="series, e.g. {{ series[0] if series else 'sb=1;dir=fwd' }}" style="width:100%"></p>{% endif %}
+          {% if p.dims %}<p><input type="text" name="dims" placeholder="series, e.g. {{ series[0] if series else 'sb=1' }}" style="width:100%"></p>{% endif %}
           <p><input type="text" name="comment" placeholder="source / comment (e.g. ground test report)" style="width:100%"></p>
           <button class="btn small secondary">Store value</button>
         </form>

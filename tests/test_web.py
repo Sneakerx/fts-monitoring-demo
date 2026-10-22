@@ -102,16 +102,16 @@ def test_pages_with_data(data_client, ingested):
     with ingested.db.session() as s:
         ev = s.scalar(select(Event).where(Event.rule == "E1_CALIBRATION_MODE"))
         prod = s.scalar(select(Product).where(Product.product_type == "FTS_L1B", Product.status == "PROCESSED"))
-        l0 = s.scalar(select(Product).where(Product.product_type == "FTS_L0_EO"))
+        l0 = s.scalar(select(Product).where(Product.product_type == "FTS_L0"))
     for path in ("/", "/parameters", "/parameters/NESR_IDX", "/parameters/NESR_SPECTRAL", "/parameters/SSD",
                  "/explorer?codes=NESR_IDX,ZPD_OFFSET", "/map", "/timeline", "/events", "/events?category=timeline",
-                 f"/events/{ev.id}", f"/products/{prod.id}", f"/products/{l0.id}", "/products?type=FTS_L0_EO",
+                 f"/events/{ev.id}", f"/products/{prod.id}", f"/products/{l0.id}", "/products?type=FTS_L0",
                  "/admin", "/reports"):
         r = data_client.get(path)
         assert r.status_code == 200, path
 
     s = data_client.get("/api/series?codes=NESR_IDX,SSD&range=7d").json()
-    assert len(s["series"]["NESR_IDX"]["traces"]) == 12 and s["series"]["SSD"]["requirement"]["lo"]
+    assert len(s["series"]["NESR_IDX"]["traces"]) == 6 and s["series"]["SSD"]["requirement"]["lo"]
     assert any(e["type"] == "DATA_GAP" for e in data_client.get("/api/series?codes=SSD&range=all").json()["timeline"])
     sp = data_client.get("/api/spectrum?code=NESR_SPECTRAL&range=1d").json()
     assert set(sp["series"]) == {"band=B1", "band=B2", "band=B3"} and set(sp["template"]) == set(sp["series"])

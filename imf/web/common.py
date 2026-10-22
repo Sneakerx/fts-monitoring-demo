@@ -66,7 +66,7 @@ def baselines(s: Session, nominal: str) -> list[str]:
 
 
 def baseline_filter(col, baseline: str):
-    """Baseline view: the baseline's own data plus baseline-independent data (L0, AUX, manual)."""
+    """Baseline view: the baseline's own data plus baseline-independent data (L0, manual)."""
     return col.in_([baseline, INDEPENDENT])
 
 

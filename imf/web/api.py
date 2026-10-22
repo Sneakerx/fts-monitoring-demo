@@ -288,7 +288,7 @@ def ingestion(request: Request, days: int = Query(30, ge=1, le=400),
                          .where(Product.sensing_start >= t0, Product.level == "L1", Product.baseline == nominal)
                          .group_by(func.date(Product.sensing_start), Product.status)).all()
         l0 = dict(s.execute(select(func.date(Product.sensing_start), func.count())
-                            .where(Product.sensing_start >= t0, Product.product_type == "FTS_L0_EO")
+                            .where(Product.sensing_start >= t0, Product.level == "L0")
                             .group_by(func.date(Product.sensing_start))).all())
     by_day: dict[str, dict] = {}
     for d, st, n in rows:

@@ -100,7 +100,7 @@ def test_backup_restore_check_repair(small_services, tmp_path):
     res = mdb.check(db)
     assert not res["ok"] and "series_without_state" in res["problems"]
     rep = mdb.repair(db)
-    assert rep["states_rebuilt"] > 50 and mdb.check(db)["ok"]
+    assert rep["states_rebuilt"] > 40 and mdb.check(db)["ok"]
 
     target = tmp_path / "restored.db"
     target.write_bytes(b"")

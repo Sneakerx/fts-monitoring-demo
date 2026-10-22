@@ -1,21 +1,20 @@
-"""FTS rules E1-E6: trigger -> recommended action and proposed output (expert approval required).
+"""Rules E1-E6 of the example instrument: trigger -> recommended action and proposed output
+(expert approval required).
 
 Proposed outputs are drafts: nothing is sent to the satellite or the processing facility by the IMF
 (there is no interface to the FOS); operations implement an approved proposal manually.
 """
 from __future__ import annotations
 
-import io
 import json
 import math
 from datetime import timedelta
 from statistics import median
 
-import h5py
 import numpy as np
 from sqlalchemy import select
 
-from ..models import Event, Parameter, Product, VectorSample
+from ..models import Event, Parameter, Product, TimelineEntry, VectorSample
 from ..timeutil import iso
 from .rules import RuleContext, rule
 
@@ -28,11 +27,28 @@ def _violating_level(ctx: RuleContext, ev: Event) -> float:
 
 
 # --- E1 ------------------------------------------------------------------------------------------
-@rule("E1_CALIBRATION_MODE", "product", watches=("AUX_EFSI",),
-      description="AUXEFSI product detected: special calibration mode was run")
-def calibration_mode(ctx: RuleContext, product: Product) -> Event:
+@rule("E1_CALIBRATION_MODE", "product", watches=("L0",),
+      description="Non-nominal observation mode detected in the L0 header: calibration mode was run")
+def calibration_mode(ctx: RuleContext, product: Product) -> Event | None:
+    """One timeline entry (and INFO event) per calibration: consecutive L0 products in the same
+    non-nominal mode extend the entry of the first one."""
     hdr = json.loads(product.header or "{}")
-    title = f"Special calibration mode {hdr.get('calibrationMode', 'EFSI')} #{hdr.get('calibrationId', '?')}"
+    mode = str(hdr.get("observationMode", "NOMINAL"))
+    if mode.upper() == "NOMINAL":
+        return None
+    gap = timedelta(minutes=float(ctx.cfg.get("merge_minutes", 120)))
+    prev = ctx.s.scalar(select(TimelineEntry).where(
+        TimelineEntry.type == "CALIBRATION_MODE", TimelineEntry.rule == ctx.rule.code,
+        TimelineEntry.start <= product.sensing_start, TimelineEntry.stop >= product.sensing_start - gap)
+        .order_by(TimelineEntry.start.desc()).limit(1))
+    if prev is not None and json.loads(prev.attributes or "{}").get("observationMode") == mode:
+        prev.stop = max(prev.stop, product.sensing_stop)
+        if prev.event_id is not None:
+            ev = ctx.s.get(Event, prev.event_id)
+            ev.last_time = ev.cleared_at = prev.stop
+            ev.n_violations += 1
+        return None
+    title = f"Observation mode {mode}" + (f" #{hdr['calibrationId']}" if "calibrationId" in hdr else "")
     ev = Event(parameter_id=None, product_id=product.id, severity="INFO", time=product.sensing_start,
                value=None, limit_text="", last_time=product.sensing_stop, n_violations=1,
                cleared_at=product.sensing_stop, status="CLOSED", category="timeline", title=title,
@@ -40,7 +56,7 @@ def calibration_mode(ctx: RuleContext, product: Product) -> Event:
     ctx.s.add(ev)
     ctx.s.flush()
     ctx.timeline("CALIBRATION_MODE", title, product.sensing_start, product.sensing_stop,
-                 product_id=product.id, event_id=ev.id, attributes=hdr)
+                 product_id=product.id, event_id=ev.id, attributes={"observationMode": mode, **hdr})
     return ev
 
 
@@ -95,28 +111,27 @@ def ctf_update(ctx: RuleContext, ev: Event) -> None:
 
 # --- E5 ------------------------------------------------------------------------------------------
 @rule("E5_ZPD_DRIFT", "trend", parameter="ZPD_OFFSET", window_days=10, max_slope_per_day=0.035,
-      min_samples=40, step_hours=12, confirm_steps=2, lead_days=7, description="ZPD drift: send telecommand")
-def zpd_telecommand(ctx: RuleContext, ev: Event, slope: float, points: list) -> None:
+      min_samples=40, step_hours=12, confirm_steps=2, lead_days=7,
+      description="ZPD drift: correct the ZPD offset")
+def zpd_correction(ctx: RuleContext, ev: Event, slope: float, points: list) -> None:
     """Propose a ZPD offset correction that re-centres the ZPD for the next `lead_days` of drift."""
     current = float(median([p[1] for p in points[-15:]]))
     lead = float(ctx.cfg.get("lead_days", 7))
     correction = round(-(current + slope * lead / 2.0), 1)
-    tc = {"telecommand": "FTS_SET_ZPD_OFFSET", "parameters": {"zpd_offset_correction_samples": correction},
-          "rationale": f"ZPD drift {slope:+.4f} samples/day, current offset {current:+.2f} samples; correction "
-                       f"centres the ZPD over the next {lead:g} days",
-          "valid_from": iso(ev.time), "status": "DRAFT - to be uplinked by operations after approval"}
-    ev.recommended_action = (f"Send telecommand FTS_SET_ZPD_OFFSET with a correction of {correction:+.1f} samples "
+    ev.recommended_action = (f"Correct the ZPD offset by {correction:+.1f} samples "
                              f"(drift {slope:+.3f} samples/day, current offset {current:+.2f} samples)")
-    ctx.propose(ev, "telecommand", "Telecommand FTS_SET_ZPD_OFFSET (re-centre ZPD)", value=correction,
-                unit="samples", payload=tc, content=json.dumps(tc, indent=2).encode(),
-                filename=f"TC_ZPD_OFFSET_{ev.time:%Y%m%dT%H%M%S}_DRAFT.json")
+    ctx.propose(ev, "value", "ZPD offset correction (re-centre the ZPD)", value=correction, unit="samples",
+                payload={"drift_samples_per_day": slope, "current_offset_samples": current, "lead_days": lead,
+                         "valid_from": iso(ev.time)})
 
 
 # --- E6 ------------------------------------------------------------------------------------------
 @rule("E6_NESR_DRIFT", "trend", parameter="NESR_IDX_MEAN", window_days=10, max_slope_per_day=0.002,
-      min_samples=40, step_hours=12, confirm_steps=2, average_hours=24,
-      description="NESR drift: update the NESR AUX file feeding the L1 quality")
-def nesr_aux_file(ctx: RuleContext, ev: Event, slope: float, points: list) -> None:
+      min_samples=40, step_hours=12, confirm_steps=2, average_hours=24, reference="NESR_TEMPLATE",
+      description="NESR drift: update the spectral NESR reference used for the L1 quality")
+def nesr_reference(ctx: RuleContext, ev: Event, slope: float, points: list) -> None:
+    """Draft of a new version of the spectral NESR reference: the orbit-averaged spectra of the last
+    `average_hours`, written in the reference-data CSV format (re-importable via Admin / CLI)."""
     p = ctx.s.scalar(select(Parameter).where(Parameter.code == "NESR_SPECTRAL"))
     since = ev.time - timedelta(hours=float(ctx.cfg.get("average_hours", 24)))
     rows = [] if p is None else list(ctx.s.scalars(select(VectorSample).where(
@@ -125,20 +140,18 @@ def nesr_aux_file(ctx: RuleContext, ev: Event, slope: float, points: list) -> No
     by_band: dict[str, list] = {}
     for r in rows:
         by_band.setdefault(r.dims.split("=", 1)[-1], []).append(r)
-    bio = io.BytesIO()
-    with h5py.File(bio, "w") as f:
-        f.attrs.update({"product_type": "AUX_NESR", "status": "DRAFT", "validity_start": iso(ev.time),
-                        "generated_by": "IMF rule E6_NESR_DRIFT", "baseline": ev.baseline,
-                        "nesr_index_slope_per_day": slope, "n_orbits": len(rows) // max(1, len(by_band) or 1)})
-        for band, vs in sorted(by_band.items()):
-            axis = np.array(json.loads(vs[0].axis))
-            vals = np.mean([json.loads(v.values) for v in vs], axis=0)
-            g = f.create_group(f"Band{band[-1]}")
-            g["wavenumber"] = axis
-            g["nesr"] = vals
-            g.attrs["unit"] = "nW/(cm2 sr cm-1)"
-    ev.recommended_action = (f"Update the NESR AUX file feeding the L1 quality (NESR index drift "
-                             f"{slope:+.4f}/day); draft generated from {len(rows)} orbit-averaged spectra")
-    ctx.propose(ev, "file", "NESR AUX file (draft)", value=slope, unit="1/day",
-                payload={"n_spectra": len(rows), "bands": sorted(by_band), "averaging_hours": ctx.cfg.get("average_hours")},
-                content=bio.getvalue(), filename=f"AUX_NESR_{ev.time:%Y%m%dT%H%M%S}_DRAFT.h5")
+    name = str(ctx.cfg.get("reference", "NESR_TEMPLATE"))
+    lines = [f"# {name} draft generated by IMF rule {ctx.rule.code}, valid from {iso(ev.time)}, "
+             f"baseline {ev.baseline}, NESR index slope {slope:+.5f}/day",
+             "band,wavenumber,value"]
+    for band, vs in sorted(by_band.items()):
+        axis = json.loads(vs[0].axis)
+        vals = np.mean([json.loads(v.values) for v in vs], axis=0)
+        lines += [f"{band},{nu:.3f},{v:.4f}" for nu, v in zip(axis, vals)]
+    ev.recommended_action = (f"Update the spectral NESR reference {name} used for the L1 quality (NESR index "
+                             f"drift {slope:+.4f}/day); draft generated from {len(rows)} orbit-averaged spectra")
+    ctx.propose(ev, "file", f"Spectral NESR reference {name} (draft)", value=slope, unit="1/day",
+                payload={"reference": name, "n_spectra": len(rows), "bands": sorted(by_band),
+                         "averaging_hours": ctx.cfg.get("average_hours"), "format": "CSV"},
+                content=("\n".join(lines) + "\n").encode(),
+                filename=f"{name}_{ev.time:%Y%m%dT%H%M%S}_DRAFT.csv")

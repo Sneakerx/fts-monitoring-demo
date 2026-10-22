@@ -2,7 +2,7 @@
 {% block title %}Parameters{% endblock %}
 {% block content %}
 <h1>Monitoring parameters</h1>
-<p class="sub">Derived from L0 headers, auxiliary and L1 products by plug-in algorithms, by windowed analyses, or entered manually / by external tools. {% if not user.is_expert %}As guest you see the public subset of parameters.{% endif %}</p>
+<p class="sub">Derived from L0 headers and L1 products by plug-in algorithms, by windowed analyses, or entered manually / by external tools. {% if not user.is_expert %}As guest you see the public subset of parameters.{% endif %}</p>
 {% for g, ps in groups %}
 <div class="panel" style="margin-bottom:14px">
   <h2>{{ g }}</h2>

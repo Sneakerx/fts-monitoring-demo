@@ -4,10 +4,10 @@ All timestamps are naive UTC. The schema is evolved with Alembic migrations (`im
 
 Conventions
 * **baseline**: processing baseline of the source product (e.g. "B03"). Data that does not depend on
-  the L1 processing baseline (L0 headers, auxiliary data, manual entries) carries `INDEPENDENT` ("")
+  the L1 processing baseline (L0 headers, manual entries) carries `INDEPENDENT` ("")
   and is shown in every baseline view.
-* **dims**: normalised dimension key of a sample series, e.g. "dir=fwd;sb=3" ("" = no dimensions).
-  One parameter can therefore have several series (sub-bands, scan directions, sensors, ...).
+* **dims**: normalised dimension key of a sample series, e.g. "band=B1;sb=3" ("" = no dimensions).
+  One parameter can therefore have several series (sub-bands, bands, sensors, ...).
 * **entry attributes** (R2): every sample/vector/timeline entry records its *entry type*
   (derived / reprocessed / manual / imported / external), *source* and *entry time*.
 """
@@ -53,13 +53,13 @@ class User(Base):
 
 
 class Product(Base):
-    """A product discovered in the PDGS catalogue (L0, L1 or auxiliary)."""
+    """A product discovered in the PDGS catalogue (L0 or L1)."""
     __tablename__ = "products"
     id: Mapped[int] = mapped_column(primary_key=True)
     pdgs_id: Mapped[str] = mapped_column(String(64), unique=True)
     name: Mapped[str] = mapped_column(String(160))
     product_type: Mapped[str] = mapped_column(String(32))
-    level: Mapped[str] = mapped_column(String(8), default="L1", server_default="L1")  # L0 | L1 | AUX
+    level: Mapped[str] = mapped_column(String(8), default="L1", server_default="L1")  # L0 | L1
     orbit: Mapped[int | None] = mapped_column(Integer, nullable=True)
     sensing_start: Mapped[datetime] = mapped_column(DateTime, index=True)
     sensing_stop: Mapped[datetime] = mapped_column(DateTime)
@@ -115,7 +115,7 @@ class Parameter(Base):
     visibility: Mapped[str] = mapped_column(String(16), default="restricted")
     sort_order: Mapped[int] = mapped_column(Integer, default=0)
     kind: Mapped[str] = mapped_column(String(8), default="scalar", server_default="scalar")  # scalar | vector
-    dims: Mapped[str] = mapped_column(String(128), default="", server_default="")  # dimension names, e.g. "sb,dir"
+    dims: Mapped[str] = mapped_column(String(128), default="", server_default="")  # dimension names, e.g. "band,sensor"
     origin: Mapped[str] = mapped_column(String(16), default="config", server_default="config")  # config|manual|external
 
     limits: Mapped[list["Limit"]] = relationship(
@@ -347,7 +347,7 @@ class Campaign(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     name: Mapped[str] = mapped_column(String(64), unique=True)
     baseline: Mapped[str] = mapped_column(String(16))
-    product_type: Mapped[str] = mapped_column(String(32), default="FTS_L1B")
+    product_type: Mapped[str] = mapped_column(String(32))
     start: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     end: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     status: Mapped[str] = mapped_column(String(16), default="PLANNED")  # PLANNED|RUNNING|DONE|FAILED|CANCELLED

@@ -1,0 +1,36 @@
+The following shall be monitored as a minimum:
+- Catalogue of nominal L0 data (header information only, e.g. number of scans, calibration views, packet errors, observation mode)
+- Catalogue of nominal L1 data, i.e. could the data be processed from L0 to L1
+- Quality data in Level 1 products: quality index per spectral sub-band (spectrally binned), quality flags, spectrally resolved noise averaged over the measurements of one orbit
+- Geometric data of the measurements: lat, lon
+- Temperature stability of two types of sensors (correlate them)
+- Optical transmission estimation from gain or calibration measurements
+- Instrument offsets determined during L1 processing (e.g. ZPD position) and their drift
+- Compute statistics of a parameter versus its requirement
+- Plot spectrally resolved quality data versus a reference (template)
+- Plot the quality index trend over time
+
+
+Requirements
+- Ingest two product types, one per level: L0 (header information only) and L1 (downloaded and read)
+- Read L1 products in the file formats HDF5 and netCDF4
+- Manually populate MDB with new parameters, supported by external files, if necessary (use case e.g. the mission timeline)
+- MDB entries shall have associated attributes: entry type, entry source, entry time
+- MDB shall be able to handle/distinguish/store different product versions and baselines
+- It shall be possible to add/remove part of the MDB
+- MDB Export shall be possible
+- Generation and maintenance of mission timeline including events. (No foreseen interface to the FOS. Timeline generation shall be maximised by systematic analysis of PDGS data)
+- Reprocessing shall be possible on the full mission in case of re-processed products, in parallel to nominal IMF operation
+- Allow integration of externally developed data processing tools (through an API)
+- Linux O/S
+- Data of full mission to be stored (MDB, extracted timeline, generated files and reports) (ingested products: the hash should be sufficient)
+- MDB backup, repair and restore
+
+
+Events:
+- Non-nominal observation mode in the L0 header -> calibration mode was run (event for the mission timeline)
+- Spectral calibration threshold reached -> update the spectral calibration (e.g. laser wavenumber)
+- Radiometric feature detected with impact on the ISRF -> update radiometric scaling for the ISRF
+- Delay between reference and science signal -> update complex transfer function
+- Offset drift (e.g. ZPD) -> propose an offset correction
+- Quality index drift -> propose an update of the spectral reference used for the L1 quality

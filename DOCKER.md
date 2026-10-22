@@ -56,7 +56,7 @@ docker run ... fts-monitoring-demo:local --days 10 --orbit-every 15
 ## First start
 
 * The simulator creates a mission history of `--days` days (default 90). The IMF then ingests this
-  backlog (L0 headers, ancillary and L1 products) in the background, which takes about 2–3 minutes.
+  backlog (L0 headers and L1 products) in the background, which takes about 2–3 minutes.
   After that, a new orbit arrives every 30 seconds.
 * The database schema is created or migrated automatically at start-up.
 * Daily and weekly reports are generated once their period is complete. They appear under

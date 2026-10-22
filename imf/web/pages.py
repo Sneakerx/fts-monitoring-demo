@@ -309,7 +309,7 @@ def acknowledge(request: Request, eid: int, comment: str = Form(""), next: str =
 def review_proposal(request: Request, pid: int, decision: str, comment: str = Form(""),
                     user: CurrentUser = Depends(require_expert)):
     """Expert approval of a proposed output (value / file / telecommand). Approval is recorded only -
-    implementation (e.g. uplink, AUX file delivery) is performed by operations."""
+    implementation (e.g. processor configuration update, uplink) is performed by operations."""
     if decision not in ("approve", "reject"):
         raise HTTPException(404)
     svc = services(request)

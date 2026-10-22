@@ -21,15 +21,21 @@ class MissionCfg(BaseModel):
     orbit_period_min: float = 101.0
 
 
+Level = Literal["L0", "L1"]
+Format = Literal["hdf5", "netcdf4"]
+
+
 class ProductTypeCfg(BaseModel):
-    """One PDGS product type to ingest.
+    """One PDGS product type to ingest. The IMF handles two product types, one per level.
 
     mode 'header': only the catalogue attributes (header information) are stored and processed,
-    the product itself is not downloaded (e.g. large L0 products). mode 'full': download + reader.
+    the product itself is not downloaded (e.g. large L0 products). mode 'full': download + reader
+    for the file format (HDF5 or netCDF4).
     """
     type: str
-    level: Literal["L0", "L1", "AUX"] = "L1"
+    level: Level = "L1"
     mode: Literal["header", "full"] = "full"
+    format: Format = "hdf5"
     baseline_filter: bool | None = None  # default: True for L1 (only the nominal baseline is polled)
 
     @property
@@ -40,8 +46,7 @@ class ProductTypeCfg(BaseModel):
 class PdgsCfg(BaseModel):
     base_url: str
     baseline: str = "B03"  # nominal processing baseline
-    product_types: list[ProductTypeCfg] = Field(default_factory=lambda: [ProductTypeCfg(type="FTS_L1B")])
-    product_type: str | None = None  # legacy single-type configuration
+    product_types: list[ProductTypeCfg] = Field(default_factory=lambda: [ProductTypeCfg(type="L1")])
     poll_interval_s: int = 20
     page_size: int = 100
     download_dir: Path = Path("data/products")
@@ -50,9 +55,10 @@ class PdgsCfg(BaseModel):
     retries: int = 3
 
     @model_validator(mode="after")
-    def _legacy_type(self) -> "PdgsCfg":
-        if self.product_type and not any(t.type == self.product_type for t in self.product_types):
-            self.product_types = [ProductTypeCfg(type=self.product_type)]
+    def _one_type_per_level(self) -> "PdgsCfg":
+        levels = [t.level for t in self.product_types]
+        if len(set(levels)) != len(levels):
+            raise ValueError("pdgs.product_types: at most one product type per level (L0, L1)")
         return self
 
     def type_cfg(self, product_type: str) -> ProductTypeCfg:
@@ -61,19 +67,26 @@ class PdgsCfg(BaseModel):
                 return t
         return ProductTypeCfg(type=product_type)
 
+    def type_for_level(self, level: str) -> str | None:
+        """Configured product type of a level (None if the level is not ingested)."""
+        return next((t.type for t in self.product_types if t.level == level), None)
+
+    def level_of(self, product_type: str) -> str:
+        return self.type_cfg(product_type).level
+
 
 class ExternalToolCfg(BaseModel):
     """External processing tool run per product: `command + [product_path]` prints {"CODE": value} as JSON."""
     name: str
     command: list[str]
-    inputs: list[str] = Field(default_factory=lambda: ["FTS_L1B"])
+    inputs: list[str] = Field(default_factory=lambda: ["L1"])  # product levels
     outputs: list[str]
     version: str = "1.0"
     timeout_s: float = 60.0
 
 
 class ProcessingCfg(BaseModel):
-    outputs_dir: Path = Path("data/outputs")     # files proposed by rules (AUX drafts, CTF updates, ...)
+    outputs_dir: Path = Path("data/outputs")     # files proposed by rules (drafts awaiting approval)
     backup_dir: Path = Path("data/backups")
     export_dir: Path = Path("data/exports")
     analysis_margin_h: float = 4.0               # a window is analysed once data this far beyond its end exists
@@ -141,7 +154,7 @@ class ParameterCfg(BaseModel):
     visibility: Literal["public", "restricted"] = "restricted"
     algorithm: str | None = None  # defaults to the parameter code
     kind: Literal["scalar", "vector"] = "scalar"
-    dims: str = ""  # names of the series dimensions, e.g. "sb,dir"
+    dims: str = ""  # names of the series dimensions, e.g. "band,sensor"
     limits: LimitCfg | None = None
     requirement: RequirementCfg | None = None
 

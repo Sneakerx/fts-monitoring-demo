@@ -3,13 +3,13 @@
 ## 1. Purpose and scope
 
 The Instrument Monitoring Facility (IMF) continuously assesses the health and performance of
-the instrument from its L0 headers, auxiliary data and Level-1 products. It
+the instrument from its L0 headers and Level-1 products. It
 
-* retrieves new products of all configured types from the Payload Data Ground Segment (PDGS),
-* derives monitoring parameters (scalars, series per sub-band / direction / sensor, spectra) and
+* retrieves new products of the two configured product types (L0 header, L1) from the Payload Data
+  Ground Segment (PDGS) and reads L1 files in HDF5 or netCDF4,
+* derives monitoring parameters (scalars, series per sub-band / band / sensor, spectra) and
   archives them in the monitoring database (MDB) with full traceability,
-* analyses data across products and over time windows (L0→L1 completeness, ZPD versus ancillary
-  data, requirement compliance),
+* analyses data across products and over time windows (L0→L1 completeness, requirement compliance),
 * detects limit violations and rule conditions, raises / notifies events, recommends actions and
   drafts the corresponding outputs for expert approval,
 * maintains a mission timeline generated from the PDGS data,
@@ -17,17 +17,19 @@ the instrument from its L0 headers, auxiliary data and Level-1 products. It
 * produces periodic reports with trend plots, and
 * gives admins, instrument experts, guests and external tools role-dependent access to all of this.
 
-This prototype implements the full chain for a Fourier-Transform Spectrometer, using a PDGS
-simulator as data source. The mapping of the feature requests onto this design is documented in
+The core is instrument-independent: it knows two product levels (L0, L1) and two file formats
+(HDF5, netCDF4). Everything instrument-specific - the L1 reader adapter, algorithms, analyses, rules
+and the parameter catalogue - is a plug-in plus configuration. The repository ships a
+Fourier-Transform Spectrometer (FTS) as example instrument, with a PDGS simulator as data source. The mapping of the feature requests onto this design is documented in
 [feature_gap_analysis.md](feature_gap_analysis.md).
 
 ## 2. Context
 
 ```mermaid
 flowchart LR
-  PDGS[(PDGS<br/>L0 / AUX / L1 catalogue + archive)] -- "OData query / download" --> IMF
+  PDGS[(PDGS<br/>L0 / L1 catalogue + archive)] -- "OData query / download" --> IMF
   IMF -- "e-mail / notification log" --> Team[Instrument team]
-  IMF -- "approved proposals<br/>(AUX drafts, TC proposals)" --> Ops[Operations / FOS<br/>manual hand-over]
+  IMF -- "approved proposals<br/>(values, file drafts)" --> Ops[Operations / FOS<br/>manual hand-over]
   Admin((Admin)) -- HTTPS --> IMF
   Expert((Expert)) -- HTTPS --> IMF
   Guest((Guest)) -- HTTPS --> IMF
@@ -35,7 +37,7 @@ flowchart LR
   IdP[Identity provider<br/>OIDC - operations] -.-> IMF
 ```
 
-There is no interface to the FOS: the IMF never sends telecommands or files itself.
+There is no interface to the FOS: the IMF never sends commands or files itself.
 
 ## 3. Components
 
@@ -48,7 +50,7 @@ flowchart TB
     CMP[Reprocessing campaigns<br/>own watermark / worker] --> CLI
     POL --> PIPE[Processing pipeline]
     CMP --> PIPE
-    PIPE --> RDR[Reader registry<br/>L1B · AUX · header-only]
+    PIPE --> RDR[Readers<br/>HDF5 · netCDF4 · header-only]
     PIPE --> REG[Algorithm registry<br/>plug-ins · entry points · external tools]
     PIPE --> LIM[Limit checker<br/>per series · persistence]
     POST --> ANA[Windowed analyses]
@@ -71,14 +73,14 @@ flowchart TB
 | Component | Module | Responsibility |
 |---|---|---|
 | PDGS client | `imf/ingestion/pdgs_client.py` | Catalogue query per product type (`PublicationDate gt <watermark>`, optional baseline attribute filter, `$expand=Attributes`), download with SHA-256, retry with back-off. Only component that knows the PDGS interface. |
-| Poller | `imf/ingestion/poller.py` | Polls all configured product types (L0 and auxiliary data first, then L1 of the nominal baseline), one watermark per type, skips known products, one DB transaction per product. Header-only types are not downloaded. Failed products are stored as FAILED and do not block the chain. |
+| Poller | `imf/ingestion/poller.py` | Polls the configured product types (L0 first, then L1 of the nominal baseline), one watermark per type, skips known products, one DB transaction per product. Header-only types are not downloaded. Failed products are stored as FAILED and do not block the chain. |
 | Reprocessing campaigns | `imf/ingestion/campaigns.py` | Ingest another baseline over the mission or a period, with their own watermark, in a worker thread or a separate process (`imf.cli campaign run`). |
-| Reader registry | `imf/processing/readers.py`, `l1reader.py` | One reader per product type (L1B and AUX_ANC as HDF5; header-only products as catalogue attributes). A real ICD replaces only its reader. |
-| Algorithm registry | `imf/processing/registry.py` | `@algorithm("CODE", ..., inputs=(types))`; results are floats, `Dim` (series values) or `Vector` (spectra). Plug-ins from built-in modules, `processing.plugin_modules`, entry points `imf.algorithms`, and external executables (JSON contract). Name and version are stored as the source of each sample. |
-| Algorithms | `fts_algorithms.py`, `aux_algorithms.py` | NESR (deep space, index per sub-band and direction, spectral), transmission, gain drift, ice, spectral shift, ILS, ISRF feature, SSD, laser, ZPD, interferogram, reference/science delay, temperatures (incl. two bench sensor types), quality flags, geometry; L0 header and ancillary parameters. |
-| Windowed analyses | `imf/processing/analyses.py`, `fts_analyses.py` | Per day (data time), once all input types are complete: L0→L1 completeness, product links and timeline gaps; ZPD (L1) versus ancillary turn-around positions and fringe counter; SSD requirement compliance. Per baseline. |
+| Readers | `imf/processing/readers.py`, `fts_reader.py` | File formats: `HDF5File` and `NetCDF4File` give uniform access (attributes, arrays by path); the format is set per product type. Product levels: an instrument registers an adapter per level (`register_reader("L1", L1Product)`) that reads through them; header-only products are represented by their catalogue attributes. A real ICD replaces only the adapter. |
+| Algorithm registry | `imf/processing/registry.py` | `@algorithm("CODE", ..., inputs=("L0" / "L1"))` - plug-ins refer to levels, not to mission product names; results are floats, `Dim` (series values) or `Vector` (spectra). Plug-ins from built-in modules, `processing.plugin_modules`, entry points `imf.algorithms`, and external executables (JSON contract). Name and version are stored as the source of each sample. |
+| Algorithms (example FTS) | `fts_algorithms.py` | L0 header (scans, calibration views, packet errors); NESR (deep space, index per sub-band, spectral), transmission, gain drift, ice, spectral shift, ILS, ISRF feature, SSD, laser, ZPD, interferogram, reference/science delay, temperatures (incl. two bench sensor types), quality flags, geometry. |
+| Windowed analyses | `imf/processing/analyses.py`, `fts_analyses.py` | Per day (data time), once all input levels are complete: L0→L1 completeness, product links and timeline gaps; SSD requirement compliance. Per baseline. |
 | Limit checker | `imf/monitoring/limits.py` | Classifies each sample, confirms level changes after *N* consecutive samples per series (parameter, baseline, dims), opens and clears events. |
-| Rule engine | `imf/monitoring/rules.py`, `fts_rules.py` | Product, limit and trend rules (E1–E6). Attaches recommended actions and generates proposed outputs (values, files, telecommand proposals). Nominal baseline only. |
+| Rule engine | `imf/monitoring/rules.py`, `fts_rules.py` | Product, limit and trend rules (E1–E6). Attaches recommended actions and generates proposed outputs (values, files, command proposals). Nominal baseline only. |
 | Mission timeline | `imf/monitoring/timeline.py` | Data gaps, L1 processing gaps, calibration modes, anomalies, actions, campaigns; manual, imported and external entries. |
 | Notifier | `imf/monitoring/notifier.py` | Notification log + optional SMTP, including recommended actions. |
 | Report service | `imf/reporting/` | Data-time-driven scheduling, statistics per parameter, requirement compliance, actions, timeline, NESR versus template, trend plots; HTML and PDF. |
@@ -97,7 +99,7 @@ sequenceDiagram
   participant L as Limit checker / rules
   participant D as MDB
   S->>P: every 20 s
-  loop product types (L0, AUX, L1 nominal)
+  loop product types (L0, L1 nominal)
     P->>G: GET Products?$filter=ProductType eq T and PublicationDate gt W_T
     G-->>P: entries + attributes
     loop each product (own transaction)
@@ -105,7 +107,7 @@ sequenceDiagram
         P->>A: header algorithms (catalogue attributes)
       else full
         P->>G: GET Products(Id)/$value (SHA-256)
-        P->>A: algorithms registered for T
+        P->>A: algorithms registered for the level of T (reader for its format)
       end
       A-->>P: scalars / series / spectra
       P->>L: check each series, product and limit rules
@@ -126,7 +128,7 @@ time. Backlog ingestion, live operation and reprocessing therefore produce ident
 erDiagram
   PRODUCTS ||--o{ SAMPLES : "derived from (optional)"
   PRODUCTS ||--o{ VECTOR_SAMPLES : "derived from"
-  PRODUCTS ||--o{ PRODUCT_LINKS : "L0/AUX -> L1"
+  PRODUCTS ||--o{ PRODUCT_LINKS : "L0 -> L1"
   PARAMETERS ||--o{ SAMPLES : has
   PARAMETERS ||--o{ VECTOR_SAMPLES : has
   PARAMETERS ||--o{ LIMITS : "versioned"
@@ -144,14 +146,14 @@ erDiagram
   POLL_RUNS
 ```
 
-* **Products** carry level (L0 / L1 / AUX), baseline, processor and product version, SHA-256 and
+* **Products** carry level (L0 / L1), baseline, processor and product version, SHA-256 and
   header attributes. Only the checksum of a downloaded product is kept (`keep_products: false`).
 * **Samples** (parameter, product, time, value, level, dims, baseline, entry type, source, entry
   time) form the time-series table, indexed on (parameter, time). Manual, imported and external
   samples have no product. In operations: PostgreSQL + TimescaleDB hypertable.
-* **Series**: `dims` (e.g. `dir=fwd;sb=3`) identifies a series of a parameter. Limits apply to all
+* **Series**: `dims` (e.g. `sb=3` or `sensor=PRT`) identifies a series of a parameter. Limits apply to all
   series of a parameter, the persistence state is kept per (parameter, baseline, dims).
-* **Baselines**: L1-derived data carries its processing baseline. L0, auxiliary and manual data are
+* **Baselines**: L1-derived data carries its processing baseline. L0 and manual data are
   baseline-independent (`""`) and appear in every baseline view. Rules act on the nominal baseline only.
 * **Vector samples** store spectra and profiles (axis + values, JSON).
 * `limits` and `requirements` are **versioned** (never updated in place): who changed what, when and why.
@@ -174,12 +176,14 @@ erDiagram
 
 | Rule | Kind | Trigger | Proposed output |
 |---|---|---|---|
-| E1 | product | AUX_EFSI product | Timeline entry "special calibration mode" |
+| E1 | product | L0 header `observationMode` ≠ NOMINAL | Timeline entry "calibration mode" (consecutive L0 products merged) |
 | E2 | limit | `SPEC_SHIFT` threshold | New visible laser wavenumber (value) |
 | E3 | limit | `ISRF_FEATURE` threshold | Radiometric scaling of the ISRF (value) |
 | E4 | limit | `REF_SCI_DELAY` threshold | Complex transfer function update (CSV) |
-| E5 | trend | `ZPD_OFFSET` slope | Telecommand proposal FTS_SET_ZPD_OFFSET (JSON) |
-| E6 | trend | `NESR_IDX_MEAN` slope | Draft NESR AUX file (HDF5) from the orbit-averaged spectral NESR |
+| E5 | trend | `ZPD_OFFSET` slope | ZPD offset correction (value) |
+| E6 | trend | `NESR_IDX_MEAN` slope | New version of the `NESR_TEMPLATE` reference (CSV, re-importable) from the orbit-averaged spectral NESR |
+
+E1-E6 belong to the example instrument (`fts_rules.py`); the rule kinds and the proposal workflow are generic.
 
 Trend rules use a robust Theil–Sen slope over a sliding window, evaluated in fixed data-time steps.
 They need confirmation over consecutive steps, clear with hysteresis, and exclude samples that
@@ -204,7 +208,7 @@ All security-relevant actions are written to the audit log. API tokens are store
 
 `config/imf.yaml` (validated with pydantic) contains:
 
-* PDGS endpoint, product types (level, header / full mode), nominal baseline and polling;
+* PDGS endpoint, the two product types (level L0 / L1, header / full mode, file format hdf5 / netcdf4), nominal baseline and polling;
 * database URL, reporting schedule, notification;
 * processing directories, plug-in modules and external tools;
 * seed users, instrument characterisation data, reference data files and rule parameters;
@@ -217,7 +221,7 @@ subsequently maintained by administrators in the DB.
 
 | Aspect | Prototype | Operational proposal |
 |---|---|---|
-| PDGS interface | Simulator, OData-like (L0 headers, AUX, L1 in two baselines) | ICD-compliant adapter (e.g. PRIP / CDSE OData), authentication, checksums |
+| PDGS interface | Simulator, OData-like (L0 headers, L1 in two baselines, HDF5 or netCDF4) | ICD-compliant adapter (e.g. PRIP / CDSE OData), authentication, checksums |
 | Database | SQLite (WAL) with Alembic migrations | PostgreSQL + TimescaleDB, backups (`pg_dump` via the CLI), HA |
 | Processing | In-process; campaigns in a thread or a separate CLI process | Worker pool / queue for re-processing campaigns, containerised |
 | Authentication | Local accounts (scrypt), API tokens | SSO via OIDC (Keycloak federated with agency IdP), MFA |
@@ -230,10 +234,13 @@ subsequently maintained by administrators in the DB.
 
 * **New parameter**: write an `@algorithm` function (or an external tool), add the parameter to the
   YAML. Use `Dim` for series and `Vector` for spectra.
-* **New input type**: add the product type to `pdgs.product_types` and register a reader (or use
-  header mode); declare the type in the algorithms' `inputs`.
+* **Other product names / file format**: set the type name and `format` (hdf5 / netcdf4) of the L0 and
+  L1 entries in `pdgs.product_types`; plug-ins are unaffected because they refer to the level.
+* **New product layout**: register an adapter for the level (`register_reader("L1", MyL1Product)`),
+  derived from `DatasetProduct`, so it works for both file formats.
 * **New analysis**: `@analysis("CODE", inputs=(...))` in a plug-in module, evaluated per day.
 * **New rule**: `@rule("CODE", "product" | "limit" | "trend", ...)`; parameters in the `rules:` configuration.
 * **External tools**: Python packages via the entry-point groups `imf.algorithms`, `imf.rules`,
   `imf.analyses`; executables via `processing.external_tools`; any language via the write API `/api/v1`.
-* **New mission / instrument**: new readers + algorithm / rule modules, same core.
+* **New mission / instrument**: a reader adapter + algorithm / analysis / rule modules + parameter
+  catalogue (`processing.plugin_modules`, entry points), same core.

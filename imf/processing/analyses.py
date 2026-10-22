@@ -2,12 +2,12 @@
 requirement statistics) and the post-processing job that runs them together with the trend rules.
 
 An analysis is a function `(ctx: AnalysisContext, start, end) -> list[AnalysisOutput]` evaluated per
-day (data time) once all its input product types have data beyond the day plus a margin, so backfill,
+day (data time) once all its input product levels (L0 / L1) have data beyond the day plus a margin, so backfill,
 live operation and reprocessing give identical results. Results are stored as samples of derived
 parameters (entry type 'derived', source 'analysis:<name>@<version>') and limit-checked like any
 other sample. Analyses run per processing baseline (nominal + reprocessing campaigns).
 
-    @analysis("L1_COMPLETENESS", inputs=("FTS_L0_EO", "FTS_L1B"))
+    @analysis("L1_COMPLETENESS", inputs=("L0", "L1"))
     def completeness(ctx, start, end):
         ...
         return [AnalysisOutput("L1_COMPLETENESS", mid, 97.3)]
@@ -63,7 +63,7 @@ class Analysis:
 _ANALYSES: dict[str, Analysis] = {}
 
 
-def analysis(*outputs: str, version: str = "1.0", inputs: tuple[str, ...] = ("FTS_L1B",),
+def analysis(*outputs: str, version: str = "1.0", inputs: tuple[str, ...] = ("L1",),
              per_baseline: bool = True) -> Callable:
     def deco(fn: Callable) -> Callable:
         _ANALYSES[fn.__name__] = Analysis(fn.__name__, tuple(outputs), fn, version, tuple(inputs), per_baseline)
@@ -96,22 +96,22 @@ class AnalysisContext:
     def is_nominal(self) -> bool:
         return self.baseline == self.nominal_baseline
 
-    def _bl(self, product_type: str) -> list[str]:
-        level = self.settings.pdgs.type_cfg(product_type).level
+    def _bl(self, level: str) -> list[str]:
         return [self.baseline] if level == "L1" else [INDEPENDENT, self.baseline]
 
-    def products(self, product_type: str, start: datetime, end: datetime, status: str | None = "PROCESSED"
+    def products(self, level: str, start: datetime, end: datetime, status: str | None = "PROCESSED"
                  ) -> list[Product]:
-        q = select(Product).where(Product.product_type == product_type, Product.sensing_start >= start,
-                                  Product.sensing_start < end, Product.baseline.in_(self._bl(product_type)))
+        """Products of a level (L0 / L1) sensed in [start, end) for this analysis' baseline."""
+        q = select(Product).where(Product.level == level, Product.sensing_start >= start,
+                                  Product.sensing_start < end, Product.baseline.in_(self._bl(level)))
         if status:
             q = q.where(Product.status == status)
         return list(self.s.scalars(q.order_by(Product.sensing_start)))
 
-    def last_product_before(self, product_type: str, t: datetime) -> Product | None:
+    def last_product_before(self, level: str, t: datetime) -> Product | None:
         return self.s.scalar(select(Product).where(
-            Product.product_type == product_type, Product.sensing_start < t,
-            Product.baseline.in_(self._bl(product_type))).order_by(Product.sensing_start.desc()).limit(1))
+            Product.level == level, Product.sensing_start < t,
+            Product.baseline.in_(self._bl(level))).order_by(Product.sensing_start.desc()).limit(1))
 
     def samples_by_orbit(self, code: str, start: datetime, end: datetime, baseline: str | None = None
                          ) -> dict[int, tuple[datetime, float, int]]:
@@ -166,9 +166,9 @@ class AnalysisService:
 
     def _horizon(self, s: Session, a: Analysis, baseline: str) -> datetime | None:
         latest = []
-        for t in a.inputs:
-            bl = [baseline] if self.settings.pdgs.type_cfg(t).level == "L1" else [INDEPENDENT, baseline]
-            v = s.scalar(select(func.max(Product.sensing_stop)).where(Product.product_type == t,
+        for level in a.inputs:
+            bl = [baseline] if level == "L1" else [INDEPENDENT, baseline]
+            v = s.scalar(select(func.max(Product.sensing_stop)).where(Product.level == level,
                                                                       Product.baseline.in_(bl)))
             if v is None:
                 return None
@@ -177,9 +177,9 @@ class AnalysisService:
 
     def _first_day(self, s: Session, a: Analysis, baseline: str) -> datetime | None:
         firsts = []
-        for t in a.inputs:
-            bl = [baseline] if self.settings.pdgs.type_cfg(t).level == "L1" else [INDEPENDENT, baseline]
-            v = s.scalar(select(func.min(Product.sensing_start)).where(Product.product_type == t,
+        for level in a.inputs:
+            bl = [baseline] if level == "L1" else [INDEPENDENT, baseline]
+            v = s.scalar(select(func.min(Product.sensing_start)).where(Product.level == level,
                                                                        Product.baseline.in_(bl)))
             if v is not None:
                 firsts.append(v)

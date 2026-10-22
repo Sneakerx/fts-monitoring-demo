@@ -1,8 +1,8 @@
 """PDGS poller: discovers new products of all configured types, downloads and processes them.
 
 * One watermark on PublicationDate per product type -> only new publications are requested.
-* L1 types are polled for the nominal baseline only (reprocessed baselines: `campaigns.py`).
-* Header-only types (e.g. L0) are not downloaded: their catalogue attributes are stored and processed.
+* The L1 type is polled for the nominal baseline only (reprocessed baselines: `campaigns.py`).
+* Header-only types (typically L0) are not downloaded: their catalogue attributes are stored and processed.
 * Idempotent: products already known (by PDGS Id) are skipped.
 * Each product is processed in its own transaction; a failing product is recorded as FAILED
   and does not block the others.
@@ -28,7 +28,7 @@ from .pdgs_client import PdgsClient, PdgsError, ProductEntry
 log = logging.getLogger(__name__)
 
 WATERMARK_PREFIX = "poll.watermark."
-LEVEL_ORDER = {"L0": 0, "AUX": 1, "L1": 2}  # L0 / auxiliary data first, so L1 analyses find their inputs
+LEVEL_ORDER = {"L0": 0, "L1": 1}  # L0 first, so L1 analyses find their inputs
 
 
 @dataclass

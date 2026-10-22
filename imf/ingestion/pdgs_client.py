@@ -42,7 +42,7 @@ class PdgsError(RuntimeError):
 
 
 class PdgsClient:
-    def __init__(self, base_url: str, product_type: str = "FTS_L1B", timeout_s: float = 30.0, retries: int = 3,
+    def __init__(self, base_url: str, product_type: str | None = None, timeout_s: float = 30.0, retries: int = 3,
                  transport: httpx.BaseTransport | None = None):
         self.base_url = base_url.rstrip("/")
         self.product_type = product_type
@@ -72,6 +72,8 @@ class PdgsClient:
     def query_new(self, published_after: datetime | None, top: int = 100, product_type: str | None = None,
                   baseline: str | None = None) -> list[ProductEntry]:
         ptype = product_type or self.product_type
+        if not ptype:
+            raise ValueError("product type required")
         flt = f"ProductType eq '{ptype}'"
         if published_after is not None:
             flt += f" and PublicationDate gt {iso(published_after)}"

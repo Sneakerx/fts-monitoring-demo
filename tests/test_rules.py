@@ -3,7 +3,6 @@ import json
 from datetime import datetime, timedelta
 from pathlib import Path
 
-import h5py
 import numpy as np
 import pytest
 from sqlalchemy import select
@@ -84,14 +83,13 @@ def test_trend_rule_zpd_raises_once_and_clears(env):
         assert 13 <= (ev.time - T0).days <= 17
         assert ev in cleared and (ev.cleared_at - T0).days >= 22
         po = ev.proposals[0]
-        tc = json.loads(Path(po.file_path).read_text())
-        assert po.kind == "telecommand" and tc["telecommand"] == "FTS_SET_ZPD_OFFSET"
-        assert tc["parameters"]["zpd_offset_correction_samples"] < 0
+        assert po.kind == "value" and po.value < 0 and po.file_path is None
+        assert json.loads(po.payload)["drift_samples_per_day"] > 0
         # idempotent: evaluated windows are not evaluated again
         assert engine.evaluate_trends(s) == ([], [])
 
 
-def test_trend_rule_nesr_writes_aux_file(env):
+def test_trend_rule_nesr_proposes_reference_update(env):
     settings, db, engine = env
     n = int(20 * 86400 / (101 * 60))
     days = np.arange(n) * 101 / 1440
@@ -106,20 +104,33 @@ def test_trend_rule_nesr_writes_aux_file(env):
         new, _ = engine.evaluate_trends(s)
         ev = next(e for e in new if e.rule == "E6_NESR_DRIFT")
         po = ev.proposals[0]
-        with h5py.File(po.file_path) as f:
-            assert set(f) == {"Band1", "Band2", "Band3"} and f.attrs["status"] == "DRAFT"
-            assert list(f["Band1/nesr"][()]) == [10.0, 11.0, 12.0]
+        assert po.kind == "file" and po.file_path.endswith("_DRAFT.csv")
+        # the draft is a new version of the reference data, in the import format
+        from imf.mdb import import_reference_csv, reference
+        refs = import_reference_csv(s, Path(po.file_path), "NESR_TEMPLATE")
+        assert sorted(r.dims for r in refs) == ["band=B1", "band=B2", "band=B3"]
+        ref = reference(s, "NESR_TEMPLATE", "band=B1")
+        assert ref.version == 2 and json.loads(ref.values) == [10.0, 11.0, 12.0]
 
 
 def test_product_rule_calibration_mode(env):
     settings, db, engine = env
-    with db.session() as s:
-        p = Product(pdgs_id="x", name="FTS1_AUX_EFSI", product_type="AUX_EFSI", level="AUX", orbit=None,
-                    sensing_start=T0, sensing_stop=T0 + timedelta(hours=2), publication_date=T0, baseline="",
-                    header=json.dumps({"calibrationMode": "EFSI", "calibrationId": 7}), status="PROCESSED")
+    orbit = timedelta(minutes=101)
+
+    def l0(i, mode, **extra):
+        p = Product(pdgs_id=f"x{i}", name=f"L0_{i}", product_type="FTS_L0", level="L0", orbit=i,
+                    sensing_start=T0 + i * orbit, sensing_stop=T0 + (i + 1) * orbit, publication_date=T0,
+                    baseline="", header=json.dumps({"observationMode": mode, **extra}), status="PROCESSED")
         s.add(p)
         s.flush()
-        events = engine.on_product(s, p)
+        return p
+
+    with db.session() as s:
+        assert engine.on_product(s, l0(0, "NOMINAL")) == []
+        first = l0(1, "CALIBRATION", calibrationId=7)
+        events = engine.on_product(s, first)
         assert len(events) == 1 and events[0].severity == "INFO" and "#7" in events[0].title
+        assert engine.on_product(s, l0(2, "CALIBRATION", calibrationId=7)) == []  # same calibration
         entry = s.scalar(select(TimelineEntry).where(TimelineEntry.type == "CALIBRATION_MODE"))
-        assert entry.start == T0 and entry.stop == T0 + timedelta(hours=2) and entry.product_id == p.id
+        assert entry.start == T0 + orbit and entry.stop == T0 + 3 * orbit and entry.product_id == first.id
+        assert events[0].cleared_at == entry.stop

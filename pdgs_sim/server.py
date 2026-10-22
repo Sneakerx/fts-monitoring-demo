@@ -5,12 +5,12 @@ Endpoints (subset of the Copernicus/ESA OData conventions):
                          [and Attributes/OData.CSC.StringAttribute/any(att:att/Name eq 'baseline'
                               and att/OData.CSC.StringAttribute/Value eq 'B03')]
                          &$orderby=PublicationDate asc&$top=100&$expand=Attributes
-  GET /odata/v1/Products({Id})/$value      -> HDF5 product (L1B, AUX_ANC); L0 / AUX_EFSI are header-only
+  GET /odata/v1/Products({Id})/$value      -> L1B product (HDF5 or netCDF4, `--l1-format`); L0 is header-only
   GET /status                              -> simulator clock
 
-Product types: FTS_L0_BB / FTS_L0_DS / FTS_L0_EO (L0 views, header information as catalogue attributes),
-AUX_ANC (ancillary data per orbit), AUX_EFSI (special calibration mode), FTS_L1B in the nominal baseline
-B03 and the reprocessing baseline B04.
+Product types: FTS_L0 (one per orbit, header information as catalogue attributes, incl. the observation
+mode - calibration modes are flagged there) and FTS_L1B in the nominal baseline B03 and the reprocessing
+baseline B04.
 
 Simulated time: on first start the mission begins `--days` days in the past, so a backlog of
 products is immediately available (backfill). Afterwards the mission clock runs `--accel` times
@@ -34,7 +34,7 @@ import uvicorn
 from fastapi import FastAPI, HTTPException, Query, Response
 
 from . import scenario as sc
-from .generator import ancillary_name, generate_ancillary, generate_product, product_name
+from .generator import generate_product, product_name
 
 
 @dataclass(frozen=True)
@@ -47,11 +47,7 @@ class TypeSpec:
 
 TYPES = {
     "FTS_L1B": TypeSpec(0x5F1B, (1.5, 3.0), True, "L1"),
-    "FTS_L0_BB": TypeSpec(0x5F0B, (0.3, 0.8), False, "L0"),
-    "FTS_L0_DS": TypeSpec(0x5F0D, (0.3, 0.8), False, "L0"),
-    "FTS_L0_EO": TypeSpec(0x5F0E, (0.3, 0.8), False, "L0"),
-    "AUX_ANC": TypeSpec(0x0A0C, (0.5, 1.2), True, "AUX"),
-    "AUX_EFSI": TypeSpec(0x0A0E, (1.0, 1.0), False, "AUX"),
+    "FTS_L0": TypeSpec(0x5F0E, (0.3, 0.8), False, "L0"),
 }
 BASELINE_CODE = {"B03": 0, "B04": 4}
 REPRO_EXTRA_LATENCY_H = 1.5  # B04 products are published after the nominal ones
@@ -72,9 +68,10 @@ def _parse(value: str) -> datetime:
 
 
 class SimClock:
-    def __init__(self, state_file: Path, days: float, accel: float):
+    def __init__(self, state_file: Path, days: float, accel: float, l1_format: str = "hdf5"):
         self.state_file = state_file
         self.accel = accel
+        self.l1_format = l1_format
         self._lock = threading.Lock()
         if state_file.exists():
             st = json.loads(state_file.read_text())
@@ -112,14 +109,6 @@ class SimClock:
     def publication_of(self, index: int, ptype: str = PRODUCT_TYPE, baseline: str = "B03") -> datetime:
         return self.start_of(index) + timedelta(seconds=sc.ORBIT_PERIOD_S + self.latency_s(index, ptype, baseline))
 
-    # --- special calibration mode (AUX_EFSI): one product per calibration -----
-    def efsi_window(self, k: int) -> tuple[datetime, datetime]:
-        start = self.mission_start + timedelta(days=sc.EFSI_DAYS[k])
-        return start, start + timedelta(days=sc.EFSI_DURATION_D)
-
-    def efsi_publication(self, k: int) -> datetime:
-        return self.efsi_window(k)[1] + timedelta(hours=TYPES["AUX_EFSI"].latency_h[0])
-
 
 def product_id(index: int, ptype: str = PRODUCT_TYPE, baseline: str = "B03") -> str:
     bl = BASELINE_CODE.get(baseline, 0) if ptype == PRODUCT_TYPE else 0
@@ -156,37 +145,29 @@ def create_app(clock: SimClock) -> FastAPI:
         yield
         clock.save()
 
-    app = FastAPI(title="PDGS Simulator (FTS L0 / L1b / AUX)", version="2.0", lifespan=lifespan)
+    app = FastAPI(title="PDGS Simulator (FTS L0 / L1b)", version="3.0", lifespan=lifespan)
+    l1_media = {"hdf5": "application/x-hdf5", "netcdf4": "application/x-netcdf"}[clock.l1_format]
 
     def entry(ptype: str, baseline: str, i: int) -> dict:
-        if ptype == "AUX_EFSI":
-            start, stop = clock.efsi_window(i)
-            name = f"FTS1_AUX_EFSI_{start:%Y%m%dT%H%M%S}_{stop:%Y%m%dT%H%M%S}_C{i + 1:03d}.h5"
-            pub, orbit = clock.efsi_publication(i), None
-            attrs = {"productType": ptype, "calibrationMode": "EFSI", "numberOfSequences": 12,
-                     "calibrationId": i + 1}
+        start = clock.start_of(i)
+        stop = start + timedelta(seconds=sc.ORBIT_PERIOD_S)
+        pub, orbit = clock.publication_of(i, ptype, baseline), i + 1
+        attrs = {"productType": ptype, "orbitNumber": i + 1}
+        if ptype == PRODUCT_TYPE:
+            name = product_name(i, start, stop, baseline, clock.l1_format)
+            attrs |= {"baseline": baseline, "processorVersion": sc.BASELINES[baseline], "productVersion": "01"}
         else:
-            start = clock.start_of(i)
-            stop = start + timedelta(seconds=sc.ORBIT_PERIOD_S)
-            pub, orbit = clock.publication_of(i, ptype, baseline), i + 1
-            attrs = {"productType": ptype, "orbitNumber": i + 1}
-            if ptype == PRODUCT_TYPE:
-                name = product_name(i, start, stop, baseline)
-                attrs |= {"baseline": baseline, "processorVersion": sc.BASELINES[baseline], "productVersion": "01"}
-            elif ptype == "AUX_ANC":
-                name = ancillary_name(i, start, stop)
-            else:
-                view = sc.L0_TYPES[ptype]
-                name = f"FTS1_L0_{view}_{start:%Y%m%dT%H%M%S}_{stop:%Y%m%dT%H%M%S}_O{i + 1:05d}.dat"
-                attrs |= sc.l0_header(ptype, i)
+            name = f"FTS1_L0_{start:%Y%m%dT%H%M%S}_{stop:%Y%m%dT%H%M%S}_O{i + 1:05d}.dat"
+            attrs |= sc.l0_header(i)
         downloadable = TYPES[ptype].downloadable
+        media = l1_media if downloadable else "application/octet-stream"
         out = {
-            "@odata.mediaContentType": "application/x-hdf5" if downloadable else "application/octet-stream",
+            "@odata.mediaContentType": media,
             "Id": product_id(i, ptype, baseline),
             "Name": name,
             "ProductType": ptype,
-            "ContentType": "application/x-hdf5" if downloadable else "application/octet-stream",
-            "ContentLength": {"FTS_L1B": 160000, "AUX_ANC": 4000}.get(ptype, 25_000_000),
+            "ContentType": media,
+            "ContentLength": 160000 if downloadable else 25_000_000,
             "OriginDate": _iso(stop),
             "PublicationDate": _iso(pub),
             "Online": True,
@@ -198,16 +179,11 @@ def create_app(clock: SimClock) -> FastAPI:
         return out
 
     def exists(ptype: str, baseline: str, i: int) -> bool:
-        if ptype == "AUX_EFSI":
-            return 0 <= i < len(sc.EFSI_DAYS)
         if sc.is_gap(i):
             return False
         return not (ptype == PRODUCT_TYPE and sc.is_l1_gap(i, baseline))
 
     def published(ptype: str, baseline: str, after: datetime | None, now: datetime) -> list[int]:
-        if ptype == "AUX_EFSI":
-            return [k for k in range(len(sc.EFSI_DAYS))
-                    if clock.efsi_publication(k) <= now and (after is None or clock.efsi_publication(k) > after)]
         period = sc.ORBIT_PERIOD_S
         lo, hi = TYPES[ptype].latency_h
         extra = REPRO_EXTRA_LATENCY_H if (ptype == PRODUCT_TYPE and baseline == "B04") else 0.0
@@ -258,9 +234,8 @@ def create_app(clock: SimClock) -> FastAPI:
             baselines = ["B03"]
         now = clock.now()
         items = [(b, i) for b in baselines if b in BASELINE_CODE for i in published(ptype, b, after, now)]
-        pub = (lambda bi: clock.efsi_publication(bi[1])) if ptype == "AUX_EFSI" else \
-            (lambda bi: clock.publication_of(bi[1], ptype, bi[0]))
-        items.sort(key=pub, reverse=orderby.strip().endswith("desc"))
+        items.sort(key=lambda bi: clock.publication_of(bi[1], ptype, bi[0]),
+                   reverse=orderby.strip().endswith("desc"))
         values = [entry(ptype, b, i) for b, i in items[:top]]
         if not (expand and "Attributes" in expand):
             for v in values:
@@ -277,12 +252,9 @@ def create_app(clock: SimClock) -> FastAPI:
             raise HTTPException(404, "Header-only product: download not simulated")
         if not exists(ptype, baseline, i) or clock.publication_of(i, ptype, baseline) > clock.now():
             raise HTTPException(404, "Product not available")
-        if ptype == PRODUCT_TYPE:
-            data = generate_product(i, clock.start_of(i), baseline)
-        else:
-            data = generate_ancillary(i, clock.start_of(i))
+        data = generate_product(i, clock.start_of(i), baseline, clock.l1_format)
         name = entry(ptype, baseline, i)["Name"]
-        return Response(data, media_type="application/x-hdf5",
+        return Response(data, media_type=l1_media,
                         headers={"Content-Disposition": f'attachment; filename="{name}"'})
 
     def _saver() -> None:
@@ -302,8 +274,10 @@ def main() -> None:
     ap.add_argument("--accel", type=float, default=sc.ORBIT_PERIOD_S / 30.0,
                     help="simulated seconds per real second (default: one orbit per 30 s)")
     ap.add_argument("--state", default="data/pdgs_sim/state.json")
+    ap.add_argument("--l1-format", default="hdf5", choices=["hdf5", "netcdf4"],
+                    help="file format of the L1 products (set pdgs.product_types[].format accordingly)")
     args = ap.parse_args()
-    clock = SimClock(Path(args.state), args.days, args.accel)
+    clock = SimClock(Path(args.state), args.days, args.accel, args.l1_format)
     uvicorn.run(create_app(clock), host=args.host, port=args.port, log_level="warning")
 
 

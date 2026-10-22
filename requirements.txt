@@ -6,6 +6,7 @@ jinja2
 apscheduler>=3.10,<4
 numpy
 h5py
+netCDF4
 matplotlib
 plotly
 httpx

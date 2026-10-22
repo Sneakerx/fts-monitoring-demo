@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% block title %}Products{% endblock %}
 {% block content %}
-<h1>Ingested products <span class="sub">L0 (header information), auxiliary and L1 products per processing baseline; only checksums of downloaded products are kept</span></h1>
+<h1>Ingested products <span class="sub">L0 (header information) and L1 products per processing baseline; only checksums of downloaded products are kept</span></h1>
 <div class="kpis">
   <div class="kpi"><div class="v">{{ stats.get('PROCESSED', 0) }}</div><div class="l">Processed</div></div>
   <div class="kpi status-{{ 'ALARM' if stats.get('FAILED') else 'NOMINAL' }}"><div class="v">{{ stats.get('FAILED', 0) }}</div><div class="l">Failed (e.g. corrupted)</div></div>

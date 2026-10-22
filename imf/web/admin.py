@@ -221,11 +221,11 @@ def trigger_job(request: Request, job: str, user: CurrentUser = Depends(require_
 # ---------------------------------------------------------------- reprocessing campaigns (R7)
 @router.post("/campaigns")
 def create_campaign(request: Request, name: str = Form(...), baseline: str = Form(...),
-                    product_type: str = Form("FTS_L1B"), start: str = Form(""), end: str = Form(""),
+                    product_type: str = Form(""), start: str = Form(""), end: str = Form(""),
                     run: bool = Form(False), user: CurrentUser = Depends(require_admin)):
     svc = services(request)
     try:
-        cid = svc.campaigns.create(name.strip(), baseline.strip(), product_type.strip(), _opt_time(start),
+        cid = svc.campaigns.create(name.strip(), baseline.strip(), product_type.strip() or None, _opt_time(start),
                                    _opt_time(end), user.username)
         if run:
             svc.campaigns.start(cid, user.username)

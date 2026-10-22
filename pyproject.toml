@@ -1,7 +1,10 @@
 [project]
 name = "imf"
 version = "0.1.0"
-description = "Instrument Monitoring Facility (IMF) prototype for an EO Fourier-Transform Spectrometer"
+description = "Instrument Monitoring Facility (IMF) for Earth-observation instruments, with a Fourier-Transform Spectrometer demo"
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
 requires-python = ">=3.11"
 dependencies = [
     "fastapi",
@@ -12,6 +15,7 @@ dependencies = [
     "apscheduler>=3.10,<4",
     "numpy",
     "h5py",
+    "netCDF4",
     "matplotlib",
     "plotly",
     "httpx",

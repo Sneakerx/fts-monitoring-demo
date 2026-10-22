@@ -32,7 +32,7 @@ def test_recovers_truth(pipeline, tmp_path, index):
 
 
 def test_corrupted_product_is_rejected(pipeline, tmp_path):
-    from imf.processing.l1reader import ProductFormatError
+    from imf.processing.readers import ProductFormatError
     index = 200
     assert sc.truth(index).corrupt
     path = tmp_path / "bad.h5"
@@ -43,7 +43,7 @@ def test_corrupted_product_is_rejected(pipeline, tmp_path):
 
 @pytest.mark.parametrize("index", [100, 910, 1100, 1220])
 def test_extended_parameters_recover_truth(pipeline, tmp_path, index):
-    """NESR index per sub-band / direction, SSD, reference delay, bench sensors, ISRF feature."""
+    """NESR index per sub-band, SSD, reference delay, bench sensors, ISRF feature."""
     from imf.processing.registry import Dim
     t = sc.truth(index)
     path = tmp_path / "p.h5"
@@ -51,9 +51,8 @@ def test_extended_parameters_recover_truth(pipeline, tmp_path, index):
     v, errors = pipeline.derive(path)
     assert not errors
     idx = {d.dims: d.value for d in v["NESR_IDX"]}
-    assert len(idx) == 2 * sc.N_SUBBANDS
-    assert idx["dir=fwd;sb=1"] == pytest.approx(t.nesr_scale, rel=0.03)
-    assert idx["dir=rev;sb=1"] == pytest.approx(t.nesr_scale * 1.03, rel=0.03)
+    assert len(idx) == sc.N_SUBBANDS
+    assert idx["sb=1"] == pytest.approx(t.nesr_scale, rel=0.02)
     assert v["SSD"] == pytest.approx(0.625 * (1 + t.laser_ppm * 1e-6), rel=2e-7)
     assert v["REF_SCI_DELAY"] == pytest.approx(t.ref_sci_delay_us, abs=0.01)
     bench = {d.dims: d.value for d in v["T_BENCH"]}
@@ -63,18 +62,42 @@ def test_extended_parameters_recover_truth(pipeline, tmp_path, index):
     assert all(isinstance(d, Dim) for d in v["QF_FRACTION"])
 
 
-def test_header_and_ancillary_algorithms(pipeline, tmp_path):
-    from pdgs_sim.generator import generate_ancillary
+def test_l0_header_algorithm(pipeline):
     index = 1000
     t = sc.truth(index)
-    hdr = sc.l0_header("FTS_L0_EO", index)
-    v, errors = pipeline.derive(None, "FTS_L0_EO", hdr)
-    assert not errors and v["L0_EO_SCANS"] == sc.NOMINAL_SCANS - t.missing_scans
-    path = tmp_path / "a.h5"
-    path.write_bytes(generate_ancillary(index, datetime(2026, 1, 1)))
-    v, errors = pipeline.derive(path, "AUX_ANC")
-    assert not errors
-    assert v["ANC_TA_OFFSET"] == pytest.approx(t.zpd_drift, abs=0.2)
+    v, errors = pipeline.derive(None, "L0", sc.l0_header(index))
+    assert not errors and v["L0_SCANS"] == sc.NOMINAL_SCANS - t.missing_scans
+    assert v["L0_PACKET_ERRORS"] == sum(t.packet_errors.values())
+    assert {d.dims: d.value for d in v["L0_CAL_VIEWS"]} == {"view=BB": t.cal_views["BB"], "view=DS": t.cal_views["DS"]}
+
+
+def test_l1_reader_formats(tmp_path):
+    """The same product written as HDF5 and as netCDF4 gives identical parameters."""
+    from imf.config import PdgsCfg, ProductTypeCfg
+    results = {}
+    for fmt, suffix in (("hdf5", ".h5"), ("netcdf4", ".nc")):
+        pdgs = PdgsCfg(base_url="x", product_types=[ProductTypeCfg(type="L1B", level="L1", format=fmt)])
+        path = tmp_path / f"p{suffix}"
+        path.write_bytes(generate_product(910, datetime(2026, 1, 1), fmt=fmt))
+        v, errors = Pipeline(load_settings().characterisation, pdgs).derive(path, "L1B")
+        assert not errors
+        results[fmt] = v
+    h5, nc = results["hdf5"], results["netcdf4"]
+    assert h5.keys() == nc.keys()
+    for code in ("NESR_B1", "SPEC_SHIFT", "SSD", "ZPD_OFFSET", "T_SENSOR_CORR", "VALID_RATIO"):
+        assert nc[code] == pytest.approx(h5[code], rel=1e-12)
+    assert [d.value for d in nc["NESR_IDX"]] == [d.value for d in h5["NESR_IDX"]]
+
+
+def test_one_product_type_per_level():
+    from pydantic import ValidationError
+    from imf.config import PdgsCfg, ProductTypeCfg
+    with pytest.raises(ValidationError):
+        PdgsCfg(base_url="x", product_types=[ProductTypeCfg(type="A", level="L1"), ProductTypeCfg(type="B", level="L1")])
+    with pytest.raises(ValidationError):
+        ProductTypeCfg(type="A", level="AUX")
+    with pytest.raises(ValidationError):
+        ProductTypeCfg(type="A", format="grib")
 
 
 def test_external_tool_contract(tmp_path):
