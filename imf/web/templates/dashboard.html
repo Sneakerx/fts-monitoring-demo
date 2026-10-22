@@ -38,7 +38,7 @@
   </div>
   <div class="grid" style="align-content:start">
     <div class="panel">
-      <h2>Data ingestion <span class="sub">L1 products per day (last 30 days) vs. expected; line: L0 earth-view products</span></h2>
+      <h2>Data ingestion <span class="sub">L1 products per day (last 30 days) vs. expected; line: L0 products</span></h2>
       <div id="ingest-chart" class="chart mid"></div>
     </div>
     {% if user.is_expert %}
@@ -91,7 +91,7 @@ async function loadCharts() {
     Plotly.react("ingest-chart", [
       { x: ing.days, y: ing.processed, type: "bar", name: "processed", marker: { color: IMF.C.series } },
       { x: ing.days, y: ing.failed, type: "bar", name: "failed", marker: { color: IMF.C.alarm } },
-      { x: ing.days, y: ing.l0, type: "scatter", mode: "lines", name: "L0 earth views", line: { color: "#2a9d8f", width: 1.5 } },
+      { x: ing.days, y: ing.l0, type: "scatter", mode: "lines", name: "L0 products", line: { color: "#2a9d8f", width: 1.5 } },
     ], { barmode: "stack", margin: { l: 40, r: 10, t: 6, b: 30 }, font: { size: 11 }, paper_bgcolor: "rgba(0,0,0,0)",
          plot_bgcolor: "#fff", legend: { orientation: "h", y: 1.15 }, yaxis: { gridcolor: IMF.C.grid },
          shapes: [{ type: "line", xref: "paper", x0: 0, x1: 1, y0: ing.expected, y1: ing.expected,

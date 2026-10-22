@@ -1,56 +1,23 @@
-"""Reader for FTS Level-1b products (HDF5). Isolates the algorithms from the file format."""
+"""Reader adapter for the FTS Level-1b product (HDF5 or netCDF4, same group / variable layout).
+
+Isolates the FTS algorithms from the file format: all data access goes through the generic
+`DatasetFile` of `readers.py`.
+"""
 from __future__ import annotations
 
-from datetime import datetime
-from pathlib import Path
-
-import h5py
 import numpy as np
 
-from ..timeutil import parse_iso
+from .readers import DatasetProduct, ProductFormatError  # noqa: F401 - re-exported for plug-ins
 
 
-class ProductFormatError(ValueError):
-    pass
-
-
-class L1Product:
+class L1Product(DatasetProduct):
     BANDS = ("B1", "B2", "B3")
-
-    def __init__(self, path: Path):
-        self.path = Path(path)
-        try:
-            self._f = h5py.File(self.path, "r")
-        except OSError as exc:
-            raise ProductFormatError(f"Cannot open product {self.path.name}: {exc}") from exc
 
     def __enter__(self) -> "L1Product":
         return self
 
-    def __exit__(self, *exc) -> None:
-        self.close()
-
-    def close(self) -> None:
-        self._f.close()
-
     def _ds(self, path: str) -> np.ndarray:
-        try:
-            return self._f[path][()]
-        except KeyError as exc:
-            raise ProductFormatError(f"Missing dataset {path} in {self.path.name}") from exc
-
-    # --- metadata ---------------------------------------------------------
-    @property
-    def attrs(self) -> dict:
-        return dict(self._f.attrs)
-
-    @property
-    def sensing_start(self) -> datetime:
-        return parse_iso(str(self._f.attrs["sensing_start"]))
-
-    @property
-    def sensing_stop(self) -> datetime:
-        return parse_iso(str(self._f.attrs["sensing_stop"]))
+        return self.read(path)
 
     # --- data access ------------------------------------------------------
     def wavenumber(self, band: str) -> np.ndarray:
@@ -70,10 +37,6 @@ class L1Product:
 
     def quality_flags(self) -> np.ndarray:
         return self._ds("Data/quality_flag")
-
-    def scan_direction(self) -> np.ndarray:
-        """0 = forward, 1 = reverse (per spectrogram)."""
-        return self._ds("Data/scan_direction")
 
     def nesr_index(self) -> np.ndarray:
         """(n_spectrograms, n_subbands) NESR index, spectrally binned by the L1 processor."""

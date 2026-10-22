@@ -1,7 +1,7 @@
 """Rule engine: trigger -> event with recommended action (+ proposed output for expert approval).
 
 Rule kinds
-* product: evaluated when a product of a watched type is ingested (e.g. AUXEFSI detected)
+* product: evaluated when a product of a watched level (L0 / L1) is ingested (e.g. non-nominal observation mode)
 * limit:   evaluated when a limit event of a watched parameter is raised (e.g. spectral calibration threshold)
 * trend:   evaluated on the data-time axis in fixed steps: robust (Theil-Sen) slope of a parameter
            over a sliding window compared with a threshold (e.g. ZPD drift, NESR drift)
@@ -169,7 +169,7 @@ class RuleEngine:
         if not self._nominal(product.baseline):
             return events
         for r in self.rules.values():
-            if r.kind == "product" and product.product_type in self.watches(r):
+            if r.kind == "product" and product.level in self.watches(r):
                 try:
                     ev = r.fn(RuleContext(self, s, r), product)
                 except Exception:  # noqa: BLE001 - a rule must never block ingestion

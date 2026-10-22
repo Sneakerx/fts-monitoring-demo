@@ -13,7 +13,7 @@
     <dl class="kv">
       <dt>PDGS endpoint</dt><dd class="mono">{{ settings.pdgs.base_url }}</dd>
       <dt>PDGS reachable</dt><dd>{% if pdgs_status %}<span class="st NOMINAL">yes</span> <span class="sub">mission time {{ pdgs_status.sim_time[:16] }} (simulator ×{{ '%.0f'|format(pdgs_status.accel) }})</span>{% else %}<span class="st ALARM">no</span>{% endif %}</dd>
-      <dt>Product types</dt><dd>{% for t in settings.pdgs.product_types %}<span class="tag">{{ t.type }} · {{ t.level }} · {{ t.mode }}</span> {% endfor %}<br><span class="sub">poll every {{ settings.pdgs.poll_interval_s }} s</span></dd>
+      <dt>Product types</dt><dd>{% for t in settings.pdgs.product_types %}<span class="tag">{{ t.type }} · {{ t.level }} · {{ t.mode }}{% if t.mode == 'full' %} · {{ t.format }}{% endif %}</span> {% endfor %}<br><span class="sub">poll every {{ settings.pdgs.poll_interval_s }} s</span></dd>
       <dt>Nominal baseline</dt><dd>{{ settings.pdgs.baseline }}{% if baselines|length > 1 %} <span class="sub">(in MDB: {{ baselines|join(', ') }})</span>{% endif %}</dd>
       <dt>Poller</dt><dd>{{ 'running' if poll_busy else 'idle' }}</dd>
       <dt>Database</dt><dd class="mono">{{ settings.database.url.split('///')[0] }} · {{ db_stats.products }} products · {{ db_stats.samples }} samples · {{ db_stats.vectors }} spectra · {{ db_stats.reports }} reports</dd>
@@ -55,7 +55,7 @@
   <form method="post" action="/admin/campaigns" class="toolbar" style="margin-top:12px">
     <input type="text" name="name" placeholder="name, e.g. REPRO-B04" required style="width:150px">
     <input type="text" name="baseline" placeholder="baseline, e.g. B04" required style="width:110px">
-    <input type="text" name="product_type" value="FTS_L1B" style="width:100px">
+    <input type="text" name="product_type" value="{{ settings.pdgs.type_for_level('L1') or '' }}" style="width:100px">
     <input type="text" name="start" placeholder="start (optional)" style="width:140px">
     <input type="text" name="end" placeholder="end (optional)" style="width:140px">
     <label class="sub"><input type="checkbox" name="run" value="true" checked> start now</label>

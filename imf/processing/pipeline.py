@@ -10,6 +10,7 @@ from pathlib import Path
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
+from ..config import DEFAULT_LEVELS, PdgsCfg, ProductTypeCfg
 from ..models import INDEPENDENT, Event, Parameter, Product, Sample, VectorSample
 from ..monitoring.limits import check_sample
 from ..timeutil import utcnow
@@ -54,20 +55,34 @@ def store_sample(s: Session, p: Parameter, value: float, time: datetime, product
 
 
 class Pipeline:
-    def __init__(self, characterisation: dict):
+    """Runs the algorithms registered for the level of a product type (e.g. L0, L1) on one product."""
+
+    def __init__(self, characterisation: dict, pdgs: PdgsCfg | None = None):
         self.characterisation = characterisation
+        self.pdgs = pdgs
         self.algorithms = load_plugins()
 
-    def algorithms_for(self, product_type: str) -> list[Algorithm]:
-        return [a for a in self.algorithms.values() if product_type in a.inputs]
+    def type_cfg(self, product_type: str) -> ProductTypeCfg:
+        """Configuration of a product type; without a PDGS configuration a level name stands for itself."""
+        if self.pdgs is not None:
+            return self.pdgs.type_cfg(product_type)
+        return ProductTypeCfg(type=product_type, level=product_type if product_type in DEFAULT_LEVELS else "L1")
 
-    def derive_outputs(self, path: Path | None, product_type: str = "FTS_L1B",
+    def algorithms_for(self, product_type: str) -> list[Algorithm]:
+        level = self.type_cfg(product_type).level
+        return [a for a in self.algorithms.values() if level in a.inputs]
+
+    def _open(self, path: Path | None, product_type: str, header: dict | None):
+        tcfg = self.type_cfg(product_type)
+        return open_product(tcfg.level, path, header, fmt=tcfg.format, product_type=product_type)
+
+    def derive_outputs(self, path: Path | None, product_type: str = "L1",
                        header: dict | None = None) -> tuple[list[tuple[Output, Algorithm]], dict[str, str]]:
-        """Run all algorithms registered for the product type. Failing algorithms do not stop the others."""
+        """Run all algorithms registered for the product's level. Failing algorithms do not stop the others."""
         outputs: list[tuple[Output, Algorithm]] = []
         errors: dict[str, str] = {}
         ctx = dict(self.characterisation)
-        with open_product(product_type, path, header) as product:
+        with self._open(path, product_type, header) as product:
             for alg in self.algorithms_for(product_type):
                 try:
                     outputs += [(o, alg) for o in normalise(alg.fn(product, ctx))]
@@ -76,13 +91,13 @@ class Pipeline:
                     log.exception("Algorithm %s failed on %s", alg.name, path.name if path else product_type)
         return outputs, errors
 
-    def derive(self, path: Path | None, product_type: str = "FTS_L1B",
+    def derive(self, path: Path | None, product_type: str = "L1",
                header: dict | None = None) -> tuple[dict, dict[str, str]]:
         """Raw algorithm results {code: float | [Dim] | Vector} - convenient for tests and tools."""
         values: dict = {}
         errors: dict[str, str] = {}
         ctx = dict(self.characterisation)
-        with open_product(product_type, path, header) as product:
+        with self._open(path, product_type, header) as product:
             for alg in self.algorithms_for(product_type):
                 try:
                     values.update(alg.fn(product, ctx))

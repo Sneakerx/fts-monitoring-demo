@@ -109,7 +109,7 @@ def add_vector(s: Session, p: Parameter, time: datetime, axis: list[float], valu
 
 
 def _parse_dims(raw: str | None) -> str:
-    """'sb=3;dir=fwd' or 'sb=3,dir=fwd' -> normalised key."""
+    """'sb=3;band=B1' or 'sb=3,band=B1' -> normalised key."""
     if not raw or not raw.strip():
         return ""
     parts = dict(p.split("=", 1) for p in raw.replace(",", ";").split(";") if "=" in p)

@@ -13,14 +13,15 @@ pdgs:
   # Switching to an operational PDGS = change URL + product types (+ auth).
   base_url: "http://127.0.0.1:8100/odata/v1"
   baseline: "B03"            # nominal L1 processing baseline (reprocessed baselines via campaigns)
-  # mode header: only the catalogue attributes (header information) are ingested, no download
+  # Product levels in ingestion order (inputs first). L1 carries the processing baselines, other levels
+  # are baseline-independent. Further levels can be added, e.g. [L0, AUX, L1] + an AUX product type.
+  levels: [L0, L1]
+  # One product type per level. Algorithms, analyses and rules refer to the level, so the type names
+  # are free. mode header: only the catalogue attributes (header information) are ingested, no
+  # download. mode full: download + reader for the file format (hdf5 | netcdf4).
   product_types:
-    - {type: FTS_L0_BB, level: L0,  mode: header}   # L0 black-body views
-    - {type: FTS_L0_DS, level: L0,  mode: header}   # L0 deep-space views
-    - {type: FTS_L0_EO, level: L0,  mode: header}   # L0 earth views
-    - {type: AUX_ANC,   level: AUX, mode: full}     # ancillary data (turn-around positions, fringe counter)
-    - {type: AUX_EFSI,  level: AUX, mode: header}   # special calibration mode
-    - {type: FTS_L1B,   level: L1,  mode: full}     # Level-1b (nominal baseline only)
+    - {type: FTS_L0,  level: L0, mode: header}                 # L0 product header
+    - {type: FTS_L1B, level: L1, mode: full, format: hdf5}     # Level-1b (nominal baseline only)
   poll_interval_s: 20
   page_size: 100
   download_dir: "data/products"
@@ -49,7 +50,7 @@ reporting:
   auto_publish: true
 
 processing:
-  outputs_dir: "data/outputs"    # proposed outputs (AUX file drafts, CTF updates, telecommand proposals)
+  outputs_dir: "data/outputs"    # proposed output files (drafts awaiting expert approval)
   backup_dir: "data/backups"
   export_dir: "data/exports"
   analysis_margin_h: 4           # a day is analysed once all input types have data this far beyond it
@@ -70,12 +71,10 @@ users:
   - {username: guest,  password: guest,  role: guest,  full_name: "Guest User"}
 
 # Instrument characterisation data used by the parameter algorithms and rules
-# (in operations: an auxiliary data file under configuration control)
+# (in operations: a characterisation data file under configuration control)
 characterisation:
   laser_nominal_nm: 1550.0
   zpd_nominal_sample: 2048
-  turnaround_nominal_sample: 1024.0
-  fringes_nominal: 16384
   nominal_scans_per_product: 30
   scan_speed_cm_s: 1.0
   ref_sci_delay_nominal_us: 2.0
@@ -102,7 +101,7 @@ rules:
   E5_ZPD_DRIFT:        {parameter: ZPD_OFFSET, window_days: 10, max_slope_per_day: 0.035, min_samples: 40,
                         step_hours: 12, confirm_steps: 2, clear_ratio: 0.5, lead_days: 7}
   E6_NESR_DRIFT:       {parameter: NESR_IDX_MEAN, window_days: 10, max_slope_per_day: 0.002, min_samples: 40,
-                        step_hours: 12, confirm_steps: 2, clear_ratio: 0.5}
+                        step_hours: 12, confirm_steps: 2, clear_ratio: 0.5, reference: NESR_TEMPLATE}
 
 # ---------------------------------------------------------------------------
 # Monitoring parameters. 'algorithm' refers to a registered plug-in output (algorithm or analysis).
@@ -125,8 +124,8 @@ parameters:
   - {code: NESR_IDX_MEAN, name: "NESR index (mean)", unit: "–", group: Radiometric, visibility: public,
      description: "L1 NESR index (NESR / spectral template) averaged over all sub-bands and spectrograms of the orbit",
      limits: {warn_hi: 1.10, alarm_hi: 1.25, persistence: 3}}
-  - {code: NESR_IDX, name: "NESR index per sub-band", unit: "–", group: Radiometric, visibility: restricted, dims: "sb,dir",
-     description: "L1 NESR index per spectral sub-band and FTS scan direction, averaged over the spectrograms of the orbit",
+  - {code: NESR_IDX, name: "NESR index per sub-band", unit: "–", group: Radiometric, visibility: restricted, dims: "sb",
+     description: "L1 NESR index per spectral sub-band, averaged over the spectrograms of the orbit",
      limits: {warn_hi: 1.12, alarm_hi: 1.27, persistence: 3}}
   - {code: NESR_SPECTRAL, name: "Spectral NESR (orbit average)", unit: "nW/(cm²·sr·cm⁻¹)", group: Radiometric,
      visibility: restricted, kind: vector, dims: "band",
@@ -156,7 +155,7 @@ parameters:
   - {code: SSD, name: "Spectral sampling distance", unit: "cm⁻¹", group: Spectral, visibility: public,
      description: "Spectral sampling distance 1/(2·OPDmax) from the metrology; statistics against the requirement",
      requirement: {lo: 0.6249984375, hi: 0.6250015625, text: "SSD = 0.625 cm⁻¹ ± 2.5 ppm",
-                   reference: "FTS-SRD-PER-040 (assumed)"}}
+                   reference: "example requirement"}}
   - {code: SSD_COMPLIANCE, name: "SSD requirement compliance", unit: "%", group: Spectral, visibility: public,
      algorithm: SSD_COMPLIANCE,
      description: "Daily fraction of products whose spectral sampling distance meets the requirement",
@@ -171,17 +170,6 @@ parameters:
   - {code: ZPD_OFFSET, name: "ZPD position offset", unit: "samples", group: Interferometric, visibility: restricted,
      description: "Mean offset of the zero-path-difference position determined during L1 processing from the nominal sample",
      limits: {warn_lo: -3.0, warn_hi: 3.0, alarm_lo: -5.0, alarm_hi: 5.0, persistence: 2}}
-  - {code: ANC_TA_OFFSET, name: "Turn-around position offset (ancillary)", unit: "samples", group: Interferometric,
-     visibility: restricted, description: "Mean corner-cube turn-around position from the ancillary data relative to nominal"}
-  - {code: ANC_FRINGE_DEV, name: "Fringe counter deviation", unit: "counts", group: Interferometric, visibility: restricted,
-     description: "Mean on-board fringe counter per scan relative to nominal (ancillary data)"}
-  - {code: ZPD_L1_ANC_DIFF, name: "ZPD: L1 vs. ancillary", unit: "samples", group: Interferometric, visibility: restricted,
-     algorithm: ZPD_L1_ANC_DIFF,
-     description: "Difference between the ZPD offset from L1 processing and the turn-around-derived offset (same orbit)",
-     limits: {warn_lo: -1.5, warn_hi: 1.5, alarm_lo: -2.5, alarm_hi: 2.5, persistence: 3}}
-  - {code: ZPD_FRINGE_CORR, name: "ZPD / fringe counter correlation", unit: "–", group: Interferometric,
-     visibility: restricted, algorithm: ZPD_FRINGE_CORR,
-     description: "Correlation of the L1 ZPD offset with the on-board fringe counter over the last 7 days (daily)"}
   - {code: IFG_PEAK_AMP, name: "Interferogram peak amplitude", unit: "DN", group: Interferometric, visibility: restricted,
      description: "Mean interferogram centre-burst amplitude (throughput indicator)",
      limits: {warn_lo: 27000.0, alarm_lo: 25000.0, persistence: 2}}
@@ -224,18 +212,18 @@ parameters:
      description: "Number of missing earth-view scans w.r.t. the nominal scan plan",
      limits: {warn_hi: 2.5, alarm_hi: 4.5, persistence: 1}}
   # --- Catalogue (L0 / L1) --------------------------------------------------
-  - {code: L0_EO_SCANS, name: "L0 earth-view scans", unit: "count", group: Catalogue, visibility: public,
+  - {code: L0_SCANS, name: "L0 earth-view scans", unit: "count", group: Catalogue, visibility: public,
      description: "Number of earth-view scans per L0 product (header information)",
      limits: {warn_lo: 27.5, alarm_lo: 25.5, persistence: 1}}
   - {code: L0_CAL_VIEWS, name: "L0 calibration views", unit: "count", group: Catalogue, visibility: restricted, dims: "view",
      description: "Number of black-body (BB) and deep-space (DS) views per L0 product (header information)",
      limits: {warn_lo: 9.5, alarm_lo: 8.5, persistence: 2}}
-  - {code: L0_PACKET_ERRORS, name: "L0 packet errors", unit: "count", group: Catalogue, visibility: restricted, dims: "view",
-     description: "Packet errors per L0 product and view type (header information)",
+  - {code: L0_PACKET_ERRORS, name: "L0 packet errors", unit: "count", group: Catalogue, visibility: restricted,
+     description: "Packet errors per L0 product (header information)",
      limits: {warn_hi: 2.5, alarm_hi: 6.0, persistence: 1}}
   - {code: L1_COMPLETENESS, name: "L0 → L1 processing completeness", unit: "%", group: Catalogue, visibility: public,
      algorithm: L1_COMPLETENESS,
-     description: "Daily fraction of L0 earth-view orbits processed to L1 (per baseline)",
+     description: "Daily fraction of L0 orbits processed to L1 (per baseline)",
      limits: {warn_lo: 98.0, alarm_lo: 90.0, persistence: 1}}
   # --- Geometric ----------------------------------------------------------
   - {code: COREG_OFFSET, name: "Co-registration offset", unit: "km", group: Geometric, visibility: public,

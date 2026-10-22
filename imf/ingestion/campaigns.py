@@ -29,10 +29,13 @@ class CampaignService:
         self.poller = poller
         self._threads: dict[int, threading.Thread] = {}
 
-    def create(self, name: str, baseline: str, product_type: str = "FTS_L1B", start: datetime | None = None,
+    def create(self, name: str, baseline: str, product_type: str | None = None, start: datetime | None = None,
                end: datetime | None = None, user: str = "system") -> int:
         if baseline == self.poller.nominal:
             raise ValueError("A reprocessing campaign needs a baseline other than the nominal one")
+        product_type = product_type or self.poller.settings.pdgs.type_for_level("L1")
+        if not product_type:
+            raise ValueError("No L1 product type configured")
         with self.db.session() as s:
             if s.scalar(select(Campaign.id).where(Campaign.name == name)):
                 raise ValueError(f"Campaign {name} already exists")

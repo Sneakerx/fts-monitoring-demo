@@ -33,7 +33,7 @@ class Services:
         self.client = PdgsClient(settings.pdgs.base_url, settings.pdgs.product_types[0].type,
                                  settings.pdgs.timeout_s, settings.pdgs.retries)
         self.notifier = Notifier(settings.notifications, settings.mission.name)
-        self.pipeline = Pipeline(settings.characterisation)
+        self.pipeline = Pipeline(settings.characterisation, settings.pdgs)
         self.rules = RuleEngine(settings)
         self.poller = Poller(self.db, self.client, self.pipeline, self.notifier, settings, self.rules)
         self.campaigns = CampaignService(self.db, self.poller)

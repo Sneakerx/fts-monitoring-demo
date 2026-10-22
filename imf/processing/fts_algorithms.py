@@ -1,14 +1,19 @@
-"""Monitoring-parameter algorithms for the Fourier-Transform Spectrometer.
+"""Monitoring-parameter algorithms for the Fourier-Transform Spectrometer (example instrument).
 
-Each function derives one or more parameters from a single L1b product. `ctx` holds the
-instrument characterisation data (config: `characterisation`) and a per-product cache.
+Each function derives one or more parameters from a single product of a level (`inputs`, default L1):
+L0 products are header-only (catalogue attributes), L1 products are read through `L1Product`
+(HDF5 or netCDF4). `ctx` holds the instrument characterisation data (config: `characterisation`)
+and a per-product cache.
 """
 from __future__ import annotations
 
 import numpy as np
 
-from .l1reader import L1Product
+from .fts_reader import L1Product
+from .readers import HeaderProduct, register_reader
 from .registry import Dim, Vector, algorithm, dims
+
+register_reader("L1", L1Product)
 
 C1 = 1.191042e-5   # mW/(m2 sr cm-4)
 C2 = 1.4387752     # cm K
@@ -40,6 +45,16 @@ def calibration_gain(p: L1Product, band: str, ctx: dict) -> np.ndarray:
         diff = p.blackbody_counts(band).mean(axis=0) - p.deep_space_counts(band).mean(axis=0)
         return diff / planck(nu, t_bb)
     return _cached(ctx, f"gain_{band}", compute)
+
+
+# --- L0 catalogue (header information) ----------------------------------------
+
+@algorithm("L0_SCANS", "L0_CAL_VIEWS", "L0_PACKET_ERRORS", inputs=("L0",))
+def l0_header(p: HeaderProduct, ctx: dict) -> dict:
+    """Number of earth-view scans, calibration views (black body / deep space) and packet errors per L0 product."""
+    return {"L0_SCANS": p.number("numberOfScans"),
+            "L0_CAL_VIEWS": [Dim(p.number(f"numberOfViews{v}"), dims(view=v)) for v in ("BB", "DS")],
+            "L0_PACKET_ERRORS": p.number("packetErrors")}
 
 
 # --- Radiometric ---------------------------------------------------------------
@@ -77,15 +92,9 @@ def transmission(p: L1Product, ctx: dict) -> dict:
 
 @algorithm("NESR_IDX", "NESR_IDX_MEAN")
 def nesr_index(p: L1Product, ctx: dict) -> dict:
-    """NESR index of the L1 processor (spectrally binned per sub-band), averaged per scan direction."""
+    """NESR index of the L1 processor (spectrally binned per sub-band), averaged over the spectrograms."""
     idx = p.nesr_index()
-    direction = p.scan_direction()
-    out = []
-    for d, name in ((0, "fwd"), (1, "rev")):
-        sel = idx[direction == d]
-        if sel.size:
-            for sb in range(idx.shape[1]):
-                out.append(Dim(float(np.mean(sel[:, sb])), dims(sb=sb + 1, dir=name)))
+    out = [Dim(float(np.mean(idx[:, sb])), dims(sb=sb + 1)) for sb in range(idx.shape[1])]
     return {"NESR_IDX": out, "NESR_IDX_MEAN": float(np.mean(idx))}
 
 

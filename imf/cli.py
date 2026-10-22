@@ -102,7 +102,7 @@ def main(argv: list[str] | None = None) -> int:
     cc = cp.add_parser("create")
     cc.add_argument("name")
     cc.add_argument("--baseline", required=True)
-    cc.add_argument("--type", default="FTS_L1B")
+    cc.add_argument("--type", default=None, help="product type (default: the configured L1 type)")
     cc.add_argument("--start")
     cc.add_argument("--end")
     cr = cp.add_parser("run")

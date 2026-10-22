@@ -14,7 +14,7 @@ from ..timeutil import utcnow
 TYPES = {
     "DATA_GAP": "No products received from the PDGS",
     "L1_GAP": "L0 data not processed to L1",
-    "CALIBRATION_MODE": "Special calibration mode",
+    "CALIBRATION_MODE": "Calibration / non-nominal observation mode",
     "ANOMALY": "Instrument anomaly (alarm)",
     "ACTION": "Action recommended by a rule",
     "BASELINE": "Processing baseline / reprocessing",

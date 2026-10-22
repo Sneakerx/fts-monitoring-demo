@@ -6,13 +6,13 @@ IMF-derived parameters against the truth.
 
 Mission-day timeline of injected events (d = days since mission start):
   d  0-40   ice build-up on cold optics (transmission loss grows ~0.21 %/day)
-  d 15.3, 47.6, 78.9  special calibration mode (AUX_EFSI product)
+  d 15.3, 47.6, 78.9  calibration mode (L0 header: observationMode CALIBRATION)
   d 30.2-30.7  PDGS outage -> no products
   d 40-41   decontamination (instrument heated, no products); ice reset
   d 41-     ice build-up resumes (~0.13 %/day)
   d 45.0-45.3  burst of missing scans and L0 packet errors (on-board data handling)
   d 52.4-54.0  cryocooler anomaly -> detector temperature excursion (+3.5 K), NESR degradation
-  d 60-     slow ZPD drift (corner-cube mechanism), visible in L1, ancillary turn-arounds and fringe counter
+  d 60-     slow ZPD drift (corner-cube mechanism)
   d 61.0-61.4  micro-vibration -> scan speed instability
   d 63.0-63.25 L1 processor anomaly -> L0 available but no L1 (baseline B03 only)
   d 65-     thermistor degradation on the optical bench (noise + drift vs. the PRT)
@@ -46,18 +46,15 @@ REFERENCE_GAIN = {"B1": (1000.0, 0.10), "B2": (1500.0, -0.05), "B3": (4000.0, 0.
 ICE_CENTER, ICE_SIGMA = 830.0, 60.0
 LASER_NOMINAL_NM = 1550.0
 ZPD_NOMINAL = 2048
-TA_NOMINAL = 1024.0          # nominal turn-around position [samples]
-FRINGES_NOMINAL = 16384      # on-board fringe counts per scan
 OPD_MAX_CM = 0.8             # -> spectral sampling distance 1 / (2 OPD) = 0.625 cm-1
 REF_SCI_DELAY_US = 2.0
 SPECTRAL_LINE_CM1 = 712.0
 
 GAPS = [(30.2, 30.7), (40.0, 41.0)]  # PDGS outage, decontamination
 L1_GAPS = [(63.0, 63.25)]            # L1 processing anomaly (nominal baseline only)
-EFSI_DAYS = [15.3, 47.6, 78.9]       # special calibration mode, 2.4 h each
-EFSI_DURATION_D = 0.1
+CALIBRATION_DAYS = [15.3, 47.6, 78.9]  # calibration mode, 2.4 h each
+CALIBRATION_DURATION_D = 0.1
 BASELINES = {"B03": "03.02", "B04": "04.00"}
-L0_TYPES = {"FTS_L0_BB": "BB", "FTS_L0_DS": "DS", "FTS_L0_EO": "EO"}
 
 
 @dataclass
@@ -182,15 +179,22 @@ def truth(index: int) -> Truth:
                  th_noise=th_noise, packet_errors=packet_errors, cal_views=cal_views)
 
 
-def l0_header(product_type: str, index: int) -> dict:
-    """Header information of an L0 product (exposed as catalogue attributes)."""
+def calibration_id(index: int) -> int | None:
+    """Number (1..) of the calibration whose window overlaps the orbit, or None (nominal observation)."""
+    a, b = mission_day(index), mission_day(index + 1)
+    for k, d0 in enumerate(CALIBRATION_DAYS):
+        if a < d0 + CALIBRATION_DURATION_D and b > d0:
+            return k + 1
+    return None
+
+
+def l0_header(index: int) -> dict:
+    """Header information of the L0 product of an orbit (exposed as catalogue attributes)."""
     t = truth(index)
-    view = L0_TYPES[product_type]
-    hdr = {"viewType": view, "instrumentMode": "NOMINAL", "packetErrors": t.packet_errors[view]}
-    if view == "EO":
-        hdr["numberOfScans"] = NOMINAL_SCANS - t.missing_scans
-    else:
-        hdr["numberOfViews"] = t.cal_views[view]
-    if view == "BB":
-        hdr["blackbodyTemperature"] = round(t.bb_temp, 3)
+    hdr = {"observationMode": "NOMINAL", "numberOfScans": NOMINAL_SCANS - t.missing_scans,
+           "numberOfViewsBB": t.cal_views["BB"], "numberOfViewsDS": t.cal_views["DS"],
+           "packetErrors": sum(t.packet_errors.values()), "blackbodyTemperature": round(t.bb_temp, 3)}
+    cal = calibration_id(index)
+    if cal is not None:
+        hdr |= {"observationMode": "CALIBRATION", "calibrationId": cal}
     return hdr

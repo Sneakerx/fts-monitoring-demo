@@ -1,15 +1,11 @@
-"""FTS windowed analyses: L0 -> L1 completeness and mission-timeline gaps, ZPD (L1) versus
-ancillary turn-around positions and fringe counter, SSD requirement compliance."""
+"""Windowed analyses of the example instrument: L0 -> L1 completeness and mission-timeline gaps,
+SSD requirement compliance."""
 from __future__ import annotations
 
-from datetime import datetime, timedelta
-
-import numpy as np
+from datetime import datetime
 
 from ..monitoring import timeline
 from .analyses import AnalysisContext, AnalysisOutput, analysis
-
-L0_TYPES = ("FTS_L0_EO", "FTS_L0_BB", "FTS_L0_DS")
 
 
 def _runs(items: list, gap_ok) -> list[list]:
@@ -23,21 +19,21 @@ def _runs(items: list, gap_ok) -> list[list]:
     return runs
 
 
-@analysis("L1_COMPLETENESS", inputs=("FTS_L0_EO", "FTS_L1B"))
+@analysis("L1_COMPLETENESS", inputs=("L0", "L1"))
 def completeness(ctx: AnalysisContext, start: datetime, end: datetime) -> list[AnalysisOutput]:
-    """Could L0 be processed to L1? Daily completeness, L0->L1 product links and timeline gaps."""
-    l0 = ctx.products("FTS_L0_EO", start, end)
+    """Could L0 be processed to L1? Daily completeness, L0->L1 product links and timeline gaps.
+    Products of both levels are matched by orbit."""
+    l0 = ctx.products("L0", start, end)
     # every L1 product delivered by the PDGS counts (a corrupted one is flagged separately as FAILED)
-    l1 = {p.orbit: p for p in ctx.products("FTS_L1B", start, end, status=None)}
-    l0_other = [p for t in L0_TYPES[1:] for p in ctx.products(t, start, end)]
-    for p in [*l0, *l0_other]:
+    l1 = {p.orbit: p for p in ctx.products("L1", start, end, status=None)}
+    for p in l0:
         if p.orbit in l1:
             ctx.link(p.id, l1[p.orbit].id, "L0->L1")
 
     if ctx.is_nominal:
         period = ctx.orbit_period
-        # data gaps: no L0 earth views for more than 1.5 orbits (incl. the boundary to the previous window)
-        prev = ctx.last_product_before("FTS_L0_EO", start)
+        # data gaps: no L0 products for more than 1.5 orbits (incl. the boundary to the previous window)
+        prev = ctx.last_product_before("L0", start)
         seq = ([prev] if prev else []) + l0
         for a, b in zip(seq, seq[1:]):
             if b.sensing_start - a.sensing_stop > 0.5 * period:
@@ -55,32 +51,6 @@ def completeness(ctx: AnalysisContext, start: datetime, end: datetime) -> list[A
         return []
     done = sum(1 for p in l0 if p.orbit in l1)
     return [AnalysisOutput("L1_COMPLETENESS", start + (end - start) / 2, 100.0 * done / len(l0))]
-
-
-@analysis("ZPD_L1_ANC_DIFF", "ZPD_FRINGE_CORR", inputs=("FTS_L1B", "AUX_ANC"))
-def zpd_ancillary(ctx: AnalysisContext, start: datetime, end: datetime) -> list[AnalysisOutput]:
-    """ZPD from L1 processing versus the ancillary turn-around positions (same orbit), and the
-    correlation of the L1 ZPD with the on-board fringe counter over the last 7 days."""
-    out: list[AnalysisOutput] = []
-    zpd = ctx.samples_by_orbit("ZPD_OFFSET", start, end)
-    ta = ctx.samples_by_orbit("ANC_TA_OFFSET", start, end, baseline="")
-    for orbit, (t, v, pid) in sorted(zpd.items()):
-        if orbit in ta:
-            out.append(AnalysisOutput("ZPD_L1_ANC_DIFF", t, v - ta[orbit][1], product_id=pid))
-    for orbit, (_, _, anc_pid) in ta.items():
-        if orbit in zpd:
-            ctx.link(anc_pid, zpd[orbit][2], "AUX->L1")
-
-    w0 = end - timedelta(days=7)
-    zpd7 = ctx.samples_by_orbit("ZPD_OFFSET", w0, end)
-    fr7 = ctx.samples_by_orbit("ANC_FRINGE_DEV", w0, end, baseline="")
-    common = sorted(set(zpd7) & set(fr7))
-    if len(common) >= 20:
-        a = np.array([zpd7[o][1] for o in common])
-        b = np.array([fr7[o][1] for o in common])
-        if a.std() > 0 and b.std() > 0:
-            out.append(AnalysisOutput("ZPD_FRINGE_CORR", start + (end - start) / 2, float(np.corrcoef(a, b)[0, 1])))
-    return out
 
 
 @analysis("SSD_COMPLIANCE", inputs=("FTS_L1B",))

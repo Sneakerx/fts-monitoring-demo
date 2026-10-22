@@ -1,17 +1,23 @@
 """Plug-in registry for parameter-derivation algorithms.
 
 An algorithm is a function `(product, ctx: dict) -> dict[str, Output]` registered with the codes
-of the parameters it produces and the product types it reads. New instrument parameters are added
+of the parameters it produces and the product levels it reads (`pdgs.levels`, default `L0` / `L1`; the
+configured product type of each level is resolved by the pipeline, so plug-ins do not depend on mission
+product names). New instrument parameters are added
 by writing a function in any module imported by `load_plugins()` - no change to the pipeline is
 needed:
 
-    @algorithm("NESR_B1", "NESR_B2", "NESR_B3")                 # default input: FTS_L1B
+    @algorithm("NESR_B1", "NESR_B2", "NESR_B3")                 # default input: L1
     def nesr(product, ctx):
         return {"NESR_B1": 24.8, "NESR_B2": 10.1, "NESR_B3": 3.0}
 
-    @algorithm("NESR_IDX", inputs=("FTS_L1B",))                  # one value per series
+    @algorithm("L0_SCANS", inputs=("L0",))                       # header-only L0 product
+    def l0_header(product, ctx):
+        return {"L0_SCANS": product.number("numberOfScans")}
+
+    @algorithm("NESR_IDX")                                       # one value per series
     def nesr_index(product, ctx):
-        return {"NESR_IDX": [Dim(1.02, dims(sb=1, dir="fwd")), ...]}
+        return {"NESR_IDX": [Dim(1.02, dims(sb=1)), ...]}
 
     @algorithm("NESR_SPECTRAL")                                  # spectrum / profile
     def nesr_spectral(product, ctx):
@@ -60,7 +66,7 @@ class Output:
 
 
 def dims(**kw) -> str:
-    """Normalised dimension key, e.g. dims(sb=3, dir="fwd") -> 'dir=fwd;sb=3'."""
+    """Normalised dimension key, e.g. dims(sb=3, band="B1") -> 'band=B1;sb=3'."""
     return ";".join(f"{k}={kw[k]}" for k in sorted(kw))
 
 
@@ -88,7 +94,7 @@ class Algorithm:
     outputs: tuple[str, ...]
     fn: AlgorithmFn
     version: str
-    inputs: tuple[str, ...] = ("FTS_L1B",)
+    inputs: tuple[str, ...] = ("L1",)  # product levels
     kind: str = "python"  # python | external
 
     @property
@@ -98,13 +104,13 @@ class Algorithm:
 
 _REGISTRY: dict[str, Algorithm] = {}
 
-PLUGIN_MODULES = ["imf.processing.fts_algorithms", "imf.processing.aux_algorithms"]
+PLUGIN_MODULES = ["imf.processing.fts_algorithms"]
 ENTRY_POINT_GROUP = "imf.algorithms"
 _extra_modules: list[str] = []
 
 
 def algorithm(*outputs: str, version: str = "1.0",
-              inputs: Iterable[str] = ("FTS_L1B",)) -> Callable[[AlgorithmFn], AlgorithmFn]:
+              inputs: Iterable[str] = ("L1",)) -> Callable[[AlgorithmFn], AlgorithmFn]:
     def deco(fn: AlgorithmFn) -> AlgorithmFn:
         _REGISTRY[fn.__name__] = Algorithm(fn.__name__, tuple(outputs), fn, version, tuple(inputs))
         return fn
