@@ -6,7 +6,8 @@ Two layers:
   arrays by path (`"Data/Band1/wavenumber"`). Implementations: `HDF5File` (h5py) and `NetCDF4File`
   (netCDF4, groups + variables). The format of a product type is configured (`pdgs.product_types[].format`).
 * **product levels** - an instrument module registers one adapter per level (`register_reader("L1", ...)`)
-  that wraps a `DatasetFile` and offers instrument-specific accessors. Header-only products (mode
+  that wraps a `DatasetFile` and offers instrument-specific accessors. Levels without an adapter
+  (e.g. an additional AUX level) are opened as a generic `DatasetProduct` (`product.read("Group/var")`). Header-only products (mode
   'header', e.g. L0) are represented by their catalogue attributes (`HeaderProduct`).
 
 Replacing a synthetic layout by the real ICD only means replacing / registering the adapter.
@@ -200,8 +201,9 @@ class HeaderProduct:
             raise ProductFormatError(f"Header field {key} missing or not numeric") from exc
 
 
-# Adapter per product level for downloaded products (instrument modules register their own)
-READERS: dict[str, type] = {"L0": DatasetProduct, "L1": DatasetProduct}
+# Adapter per product level for downloaded products (instrument modules register their own);
+# levels without an adapter use the generic DatasetProduct
+READERS: dict[str, type] = {}
 
 
 def register_reader(level: str, reader: type) -> None:
@@ -218,7 +220,4 @@ def open_product(level: str, path: Path | None = None, header: dict | None = Non
         stop = hdr.get("_sensing_stop")
         return HeaderProduct(hdr, product_type, parse_iso(start) if start else None,
                              parse_iso(stop) if stop else None)
-    reader = READERS.get(level)
-    if reader is None:
-        raise ProductFormatError(f"No reader registered for level {level}")
-    return reader(path, fmt)
+    return READERS.get(level, DatasetProduct)(path, fmt)

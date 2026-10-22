@@ -28,7 +28,6 @@ from .pdgs_client import PdgsClient, PdgsError, ProductEntry
 log = logging.getLogger(__name__)
 
 WATERMARK_PREFIX = "poll.watermark."
-LEVEL_ORDER = {"L0": 0, "L1": 1}  # L0 first, so L1 analyses find their inputs
 
 
 @dataclass
@@ -71,7 +70,9 @@ class Poller:
             s.flush()
             run_id = run.id
         try:
-            for tcfg in sorted(self.settings.pdgs.product_types, key=lambda t: LEVEL_ORDER.get(t.level, 9)):
+            # in the order of pdgs.levels (e.g. L0 first), so L1 analyses find their inputs
+            pdgs = self.settings.pdgs
+            for tcfg in sorted(pdgs.product_types, key=lambda t: pdgs.level_order(t.level)):
                 self._poll_type(tcfg, summary)
         except PdgsError as exc:
             summary.error = str(exc)

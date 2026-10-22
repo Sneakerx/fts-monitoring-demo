@@ -10,7 +10,7 @@ from pathlib import Path
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
-from ..config import PdgsCfg, ProductTypeCfg
+from ..config import DEFAULT_LEVELS, PdgsCfg, ProductTypeCfg
 from ..models import INDEPENDENT, Event, Parameter, Product, Sample, VectorSample
 from ..monitoring.limits import check_sample
 from ..timeutil import utcnow
@@ -55,7 +55,7 @@ def store_sample(s: Session, p: Parameter, value: float, time: datetime, product
 
 
 class Pipeline:
-    """Runs the algorithms registered for the level of a product type (L0 or L1) on one product."""
+    """Runs the algorithms registered for the level of a product type (e.g. L0, L1) on one product."""
 
     def __init__(self, characterisation: dict, pdgs: PdgsCfg | None = None):
         self.characterisation = characterisation
@@ -63,10 +63,10 @@ class Pipeline:
         self.algorithms = load_plugins()
 
     def type_cfg(self, product_type: str) -> ProductTypeCfg:
-        """Configuration of a product type; without a PDGS configuration the type name is the level."""
+        """Configuration of a product type; without a PDGS configuration a level name stands for itself."""
         if self.pdgs is not None:
             return self.pdgs.type_cfg(product_type)
-        return ProductTypeCfg(type=product_type, level=product_type if product_type in ("L0", "L1") else "L1")
+        return ProductTypeCfg(type=product_type, level=product_type if product_type in DEFAULT_LEVELS else "L1")
 
     def algorithms_for(self, product_type: str) -> list[Algorithm]:
         level = self.type_cfg(product_type).level

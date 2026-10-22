@@ -89,15 +89,46 @@ def test_l1_reader_formats(tmp_path):
     assert [d.value for d in nc["NESR_IDX"]] == [d.value for d in h5["NESR_IDX"]]
 
 
-def test_one_product_type_per_level():
+def test_level_configuration():
     from pydantic import ValidationError
     from imf.config import PdgsCfg, ProductTypeCfg
-    with pytest.raises(ValidationError):
+    assert PdgsCfg(base_url="x").levels == ["L0", "L1"]  # default: two levels
+    with pytest.raises(ValidationError):  # one product type per level
         PdgsCfg(base_url="x", product_types=[ProductTypeCfg(type="A", level="L1"), ProductTypeCfg(type="B", level="L1")])
-    with pytest.raises(ValidationError):
-        ProductTypeCfg(type="A", level="AUX")
+    with pytest.raises(ValidationError):  # level not declared
+        PdgsCfg(base_url="x", product_types=[ProductTypeCfg(type="A", level="AUX")])
+    with pytest.raises(ValidationError):  # L1 (processing baselines) is mandatory
+        PdgsCfg(base_url="x", levels=["L0", "AUX"])
     with pytest.raises(ValidationError):
         ProductTypeCfg(type="A", format="grib")
+    cfg = PdgsCfg(base_url="x", levels=["L0", "AUX", "L1"],
+                  product_types=[ProductTypeCfg(type="P1", level="L1"), ProductTypeCfg(type="PA", level="AUX"),
+                                 ProductTypeCfg(type="P0", level="L0", mode="header")])
+    assert [t.type for t in sorted(cfg.product_types, key=lambda t: cfg.level_order(t.level))] == ["P0", "PA", "P1"]
+    assert cfg.type_for_level("AUX") == "PA"
+
+
+def test_additional_level_with_generic_reader(tmp_path):
+    """An extra level (AUX) needs only configuration + an algorithm; without a registered adapter the
+    product is read through the generic reader, in either file format."""
+    import h5py
+    from imf.config import PdgsCfg, ProductTypeCfg
+    from imf.processing.registry import _REGISTRY, algorithm
+
+    @algorithm("AUX_MEAN", inputs=("AUX",))
+    def aux_mean(p, ctx):
+        return {"AUX_MEAN": float(p.read("Data/values").mean())}
+
+    try:
+        pdgs = PdgsCfg(base_url="x", levels=["L0", "AUX", "L1"],
+                       product_types=[ProductTypeCfg(type="MY_AUX", level="AUX"), ProductTypeCfg(type="L1B")])
+        path = tmp_path / "aux.h5"
+        with h5py.File(path, "w") as f:
+            f["Data/values"] = [1.0, 2.0, 6.0]
+        v, errors = Pipeline(load_settings().characterisation, pdgs).derive(path, "MY_AUX")
+        assert not errors and v == {"AUX_MEAN": 3.0}  # only the AUX algorithms run
+    finally:
+        _REGISTRY.pop("aux_mean", None)
 
 
 def test_external_tool_contract(tmp_path):

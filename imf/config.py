@@ -21,19 +21,19 @@ class MissionCfg(BaseModel):
     orbit_period_min: float = 101.0
 
 
-Level = Literal["L0", "L1"]
+DEFAULT_LEVELS = ["L0", "L1"]
 Format = Literal["hdf5", "netcdf4"]
 
 
 class ProductTypeCfg(BaseModel):
-    """One PDGS product type to ingest. The IMF handles two product types, one per level.
+    """One PDGS product type to ingest, assigned to one of the configured levels (`pdgs.levels`).
 
     mode 'header': only the catalogue attributes (header information) are stored and processed,
     the product itself is not downloaded (e.g. large L0 products). mode 'full': download + reader
     for the file format (HDF5 or netCDF4).
     """
     type: str
-    level: Level = "L1"
+    level: str = "L1"
     mode: Literal["header", "full"] = "full"
     format: Format = "hdf5"
     baseline_filter: bool | None = None  # default: True for L1 (only the nominal baseline is polled)
@@ -44,8 +44,12 @@ class ProductTypeCfg(BaseModel):
 
 
 class PdgsCfg(BaseModel):
+    """PDGS interface. `levels` lists the product levels in ingestion order (inputs before the products
+    derived from them); one product type per level. L1 is the processed level that carries processing
+    baselines; all other levels are baseline-independent. Default: two levels, L0 and L1."""
     base_url: str
     baseline: str = "B03"  # nominal processing baseline
+    levels: list[str] = Field(default_factory=lambda: list(DEFAULT_LEVELS))
     product_types: list[ProductTypeCfg] = Field(default_factory=lambda: [ProductTypeCfg(type="L1")])
     poll_interval_s: int = 20
     page_size: int = 100
@@ -55,11 +59,19 @@ class PdgsCfg(BaseModel):
     retries: int = 3
 
     @model_validator(mode="after")
-    def _one_type_per_level(self) -> "PdgsCfg":
-        levels = [t.level for t in self.product_types]
-        if len(set(levels)) != len(levels):
-            raise ValueError("pdgs.product_types: at most one product type per level (L0, L1)")
+    def _check_levels(self) -> "PdgsCfg":
+        if len(set(self.levels)) != len(self.levels) or "L1" not in self.levels:
+            raise ValueError(f"pdgs.levels: unique level names including L1 required, got {self.levels}")
+        used = [t.level for t in self.product_types]
+        unknown = sorted(set(used) - set(self.levels))
+        if unknown:
+            raise ValueError(f"pdgs.product_types: level(s) {unknown} not declared in pdgs.levels {self.levels}")
+        if len(set(used)) != len(used):
+            raise ValueError("pdgs.product_types: at most one product type per level")
         return self
+
+    def level_order(self, level: str) -> int:
+        return self.levels.index(level) if level in self.levels else len(self.levels)
 
     def type_cfg(self, product_type: str) -> ProductTypeCfg:
         for t in self.product_types:

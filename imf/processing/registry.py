@@ -1,8 +1,9 @@
 """Plug-in registry for parameter-derivation algorithms.
 
 An algorithm is a function `(product, ctx: dict) -> dict[str, Output]` registered with the codes
-of the parameters it produces and the product levels it reads (`L0` or `L1`; the configured product
-type of each level is resolved by the pipeline, so plug-ins do not depend on mission product names). New instrument parameters are added
+of the parameters it produces and the product levels it reads (`pdgs.levels`, default `L0` / `L1`; the
+configured product type of each level is resolved by the pipeline, so plug-ins do not depend on mission
+product names). New instrument parameters are added
 by writing a function in any module imported by `load_plugins()` - no change to the pipeline is
 needed:
 

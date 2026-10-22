@@ -17,8 +17,8 @@ the instrument from its L0 headers and Level-1 products. It
 * produces periodic reports with trend plots, and
 * gives admins, instrument experts, guests and external tools role-dependent access to all of this.
 
-The core is instrument-independent: it knows two product levels (L0, L1) and two file formats
-(HDF5, netCDF4). Everything instrument-specific - the L1 reader adapter, algorithms, analyses, rules
+The core is instrument-independent: it works with configurable product levels (default: L0 and
+L1, one product type each) and two file formats (HDF5, netCDF4). Everything instrument-specific - the L1 reader adapter, algorithms, analyses, rules
 and the parameter catalogue - is a plug-in plus configuration. The repository ships a
 Fourier-Transform Spectrometer (FTS) as example instrument, with a PDGS simulator as data source. The mapping of the feature requests onto this design is documented in
 [feature_gap_analysis.md](feature_gap_analysis.md).
@@ -208,7 +208,7 @@ All security-relevant actions are written to the audit log. API tokens are store
 
 `config/imf.yaml` (validated with pydantic) contains:
 
-* PDGS endpoint, the two product types (level L0 / L1, header / full mode, file format hdf5 / netcdf4), nominal baseline and polling;
+* PDGS endpoint, the product levels (`pdgs.levels`, default `[L0, L1]`, in ingestion order), one product type per level (header / full mode, file format hdf5 / netcdf4), nominal baseline and polling;
 * database URL, reporting schedule, notification;
 * processing directories, plug-in modules and external tools;
 * seed users, instrument characterisation data, reference data files and rule parameters;
@@ -238,6 +238,11 @@ subsequently maintained by administrators in the DB.
   L1 entries in `pdgs.product_types`; plug-ins are unaffected because they refer to the level.
 * **New product layout**: register an adapter for the level (`register_reader("L1", MyL1Product)`),
   derived from `DatasetProduct`, so it works for both file formats.
+* **Additional level** (e.g. auxiliary data): add it to `pdgs.levels` before the levels that use it
+  (`[L0, AUX, L1]`), add one product type with `level: AUX`, and write plug-ins with `inputs=("AUX",)`
+  (rules: `watches=("AUX",)`, analyses: `ctx.products("AUX", ...)`). Without a registered adapter the
+  product is opened as a generic `DatasetProduct` (`product.read("Group/var")`). Levels other than L1
+  are baseline-independent.
 * **New analysis**: `@analysis("CODE", inputs=(...))` in a plug-in module, evaluated per day.
 * **New rule**: `@rule("CODE", "product" | "limit" | "trend", ...)`; parameters in the `rules:` configuration.
 * **External tools**: Python packages via the entry-point groups `imf.algorithms`, `imf.rules`,

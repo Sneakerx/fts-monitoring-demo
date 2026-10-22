@@ -13,9 +13,12 @@ pdgs:
   # Switching to an operational PDGS = change URL + product types (+ auth).
   base_url: "http://127.0.0.1:8100/odata/v1"
   baseline: "B03"            # nominal L1 processing baseline (reprocessed baselines via campaigns)
-  # Two product types, one per level (L0, L1). Algorithms, analyses and rules refer to the level,
-  # so the type names are free. mode header: only the catalogue attributes (header information) are
-  # ingested, no download. mode full: download + reader for the file format (hdf5 | netcdf4).
+  # Product levels in ingestion order (inputs first). L1 carries the processing baselines, other levels
+  # are baseline-independent. Further levels can be added, e.g. [L0, AUX, L1] + an AUX product type.
+  levels: [L0, L1]
+  # One product type per level. Algorithms, analyses and rules refer to the level, so the type names
+  # are free. mode header: only the catalogue attributes (header information) are ingested, no
+  # download. mode full: download + reader for the file format (hdf5 | netcdf4).
   product_types:
     - {type: FTS_L0,  level: L0, mode: header}                 # L0 product header
     - {type: FTS_L1B, level: L1, mode: full, format: hdf5}     # Level-1b (nominal baseline only)

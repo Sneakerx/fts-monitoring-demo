@@ -23,7 +23,8 @@ L1b in two processing baselines, as HDF5 or netCDF4) with injected instrument an
 chain can be demonstrated offline.
 
 Plug-ins (algorithms, analyses, rules) refer to the product **level** (`L0` / `L1`), never to mission
-product names, so another instrument needs only its reader adapter, plug-in modules and parameter
+product names. The levels are configurable (`pdgs.levels`), so e.g. an auxiliary-data level can be
+added without code changes in the core, so another instrument needs only its reader adapter, plug-in modules and parameter
 catalogue (see [docs/architecture.md](docs/architecture.md#10-extension-points)).
 
 See [docs/architecture.md](docs/architecture.md) for the design and
